@@ -1,0 +1,24 @@
+{
+  "name": "betrayal-of-the-second-era",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "test": "node --test tests/rules.test.js tests/server.test.js && playwright test",
+    "test:rules": "node --test tests/rules.test.js",
+    "start": "node serve.mjs",
+    "play": "npm run build && node serve.mjs",
+    "test:server": "node --test tests/server.test.js"
+  },
+  "dependencies": {
+    "three": "^0.180.0",
+    "lucide": "^0.468.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.1",
+    "vite": "^7.1.12"
+  }
+}
