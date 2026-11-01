@@ -1,4 +1,12 @@
-# Betrayal of the Second Era — browser fan adaptation
+# Betrayal of the Second Era — browser project
+
+## Published tabletop adaptation: in development
+
+The goal is the actual Chip Theory Games tabletop game with automatic rules, solo play and online co-op. New work lives in `src/tabletop/` and is playable at **`/tabletop.html`** as a **Jailbreak combat alpha** with the tutorial's fixed two-adventurer setup. It is not the complete campaign. [Scope, verified sources and remaining work](docs/TABLETOP-PORT.md).
+
+Run `npm run test:tabletop` for the new rules and multiplayer tests. Online rooms require connected private Vercel Blob storage; without it the API explicitly reports that online play is unavailable. [Networking setup](docs/tabletop-network.md).
+
+## Earlier fan prototype
 
 A playable, unofficial solo adaptation inspired by Chip Theory Games’ *The Elder Scrolls: Betrayal of the Second Era*. Three linked tactical encounters combine dice, positioning, character progression, and choices between battles.
 
