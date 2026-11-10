@@ -1,7 +1,7 @@
 import './app.css';
 import {
   createJailbreak, reduceJailbreak, getLegalMoves, upgradeJailbreak, isJailbreakState,
-  classOptions, canDrawClasses, JAILBREAK_MAP, SKILLS, ITEMS, READY_SLOTS, INVENTORY_LIMIT,
+  classOptions, canDrawClasses, classDrawCount, JAILBREAK_MAP, SKILLS, ITEMS, READY_SLOTS, INVENTORY_LIMIT,
 } from './engine.js';
 import { JAILBREAK_ACHIEVEMENTS, achievementHolder, isClassAvailable } from './jailbreak-rewards.js';
 
@@ -383,8 +383,8 @@ function renderHeroReward(hero) {
     const intro = entry.declined ? 'Choose any remaining class.' : entry.offered ? 'Choose one of these class sheets.' : 'Choose one earned class.';
     body = `<p class="small-note">${intro}</p><div class="class-options">${options.map(name => `<button class="button ${entry.earned.includes(name) && !entry.declined ? '' : 'quiet-button'}" data-action="choose-class" data-hero="${hero.id}" data-class="${escapeHtml(name)}" ${mine ? '' : 'disabled'}>${escapeHtml(name)}</button>`).join('')}</div>`;
   } else if (drawable) {
-    const count = allDefeated ? 2 : 2 - entry.earned.length;
-    body = `<p class="small-note">${allDefeated ? 'Every adventurer was defeated: draw two class sheets and choose one.' : `Fewer than two earned classes. Set ${entry.earned.length ? `aside ${escapeHtml(entry.earned.join(', '))}, ` : ''}shuffle every other sheet and draw ${count}.`}</p><button class="button primary" data-action="draw-classes" data-hero="${hero.id}" ${mine ? '' : 'disabled'}>Draw ${count} class ${count === 1 ? 'sheet' : 'sheets'}</button>`;
+    const count = classDrawCount(state, hero.id);
+    body = `<p class="small-note">${allDefeated ? 'Every adventurer was defeated: draw two class sheets and choose one.' : `Fewer than two earned classes: shuffle every other remaining sheet and draw until holding two (${count} more).`}</p><button class="button primary" data-action="draw-classes" data-hero="${hero.id}" ${mine ? '' : 'disabled'}>Draw ${count} class ${count === 1 ? 'sheet' : 'sheets'}</button>`;
   } else {
     body = `<p class="small-note">${entry.declined ? 'Waiting until the other adventurers have chosen; then any remaining class can be chosen.' : 'Waiting for the other adventurers to choose first.'}</p>`;
   }

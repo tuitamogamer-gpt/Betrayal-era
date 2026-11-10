@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   createJailbreak, reduceJailbreak, getLegalMoves, isJailbreakState, upgradeJailbreak,
-  classOptions, canDrawClasses, JAILBREAK_SCHEMA_VERSION,
+  classOptions, canDrawClasses, classDrawCount, JAILBREAK_SCHEMA_VERSION,
 } from '../src/tabletop/engine.js';
 import { BASE_CLASSES, JAILBREAK_ACHIEVEMENTS, classPool, earnedClasses } from '../src/tabletop/jailbreak-rewards.js';
 
@@ -170,16 +170,28 @@ test('R p68: three failed attempts discard the cache, cycle the card and lose ac
 test('R p69: each adjustment step gains fatigue through the real supply, and must be paid in full', () => {
   let state = act(besideCache(), { type: 'move', to: '2,4' });
   state = act(state, { type: 'lockpick-roll' }, [d6(1), d6(2), d6(2)]);
-  state.supply = { light: 1, over: 2 };
+  // Conserve the 20 light fatigue dice: 19 already sit in cooldown tracks.
+  const light = (prefix, count) => Array.from({ length: count }, (_, index) => ({ id: `${prefix}-${index}`, kind: 'light-fatigue' }));
+  state.heroes[1].cooldown = light('dark-elf-light', 13);
+  state.heroes[0].cooldown = light('argonian-light', 6);
+  state.supply = { light: 1, over: 12 };
+  assert.ok(isJailbreakState(state));
   state = act(state, { type: 'lockpick-adjust', dieIndex: 0, delta: 3 });
-  assert.deepEqual(state.heroes[0].cooldown.map(die => die.kind), ['light-fatigue', 'overfatigue', 'overfatigue']);
-  assert.deepEqual(state.supply, { light: 0, over: 0 });
-  const before = structuredClone(state);
-  assert.throws(() => act(state, { type: 'lockpick-adjust', dieIndex: 0, delta: 1 }), { code: 'FATIGUE_SUPPLY_EMPTY' });
-  assert.deepEqual(state, before);
+  assert.deepEqual(state.heroes[0].cooldown.slice(6).map(die => die.kind), ['light-fatigue', 'overfatigue', 'overfatigue']);
+  assert.deepEqual(state.supply, { light: 0, over: 10 });
+  assert.equal(state.pending.check.fatigueSpent, 3);
   assert.throws(() => act(state, { type: 'lockpick-adjust', dieIndex: 1, delta: 5 }), { code: 'LOCKPICK_RULE' });
   state = act(state, { type: 'lockpick-resolve' });
   assert.equal(state.pending.check.phase, 'continue'); // 4-2-2 does not match 5-2-2.
+
+  // Defensive: 32 dice cannot all fit 26 track slots, so a valid game never has
+  // both supplies empty. The reducer still refuses an unpayable cost atomically.
+  let unpayable = act(besideCache(), { type: 'move', to: '2,4' });
+  unpayable = act(unpayable, { type: 'lockpick-roll' }, [d6(1), d6(2), d6(2)]);
+  unpayable.supply = { light: 0, over: 0 };
+  const before = structuredClone(unpayable);
+  assert.throws(() => reduceJailbreak(unpayable, { type: 'lockpick-adjust', dieIndex: 0, delta: 1 }), { code: 'FATIGUE_SUPPLY_EMPTY' });
+  assert.deepEqual(unpayable, before);
 });
 
 test('R p28: an unlocked item can go to the pack or be left; full inventories are refused', () => {
@@ -217,6 +229,12 @@ test('Falkreath Meat Loaf: discard for 3 bonus HP or 1 bonus HP to each adventur
   state.heroes[0].items = [meatLoaf()];
   state = act(state, { type: 'use-item', itemCode: 'CO-019', mode: 'party' }); // Start of turn is still the owner's turn.
   assert.deepEqual(state.heroes.map(item => item.bonusHp), [1, 1]);
+
+  // With the same card in the pack and a ready slot, the ready copy is used.
+  state = createJailbreak();
+  state.heroes[0].items = [meatLoaf('pack'), meatLoaf('ready')];
+  state = act(state, { type: 'use-item', itemCode: 'CO-019', mode: 'self' });
+  assert.deepEqual(state.heroes[0].items, [meatLoaf('pack')]);
 
   state = createJailbreak();
   state.heroes[1].escaped = true; state.heroes[1].position = null;
@@ -313,6 +331,21 @@ test('R p93: adventurers who both lack two options draw one at a time from every
   assert.equal(pool[3], 'Dragonknight');
   state = act(state, { type: 'draw-classes', heroId: 'dark-elf' }, [3 / pool.length + 0.001]);
   assert.deepEqual(state.rewards.heroes['dark-elf'].offered, ['Healer', 'Dragonknight']);
+});
+
+test('R p93: if an earlier draw took an adventurer\'s earned sheet, it still draws until holding two', () => {
+  let state = finishedBattle();
+  // The Argonian's shuffled sheets include the Dark Elf's earned Healer (index 3 of 14).
+  const pool = BASE_CLASSES.filter(name => name !== 'Dragonknight').sort();
+  assert.equal(pool[3], 'Healer');
+  state = act(state, { type: 'draw-classes', heroId: 'argonian' }, [3 / pool.length + 0.001]);
+  state = act(state, { type: 'choose-class', heroId: 'argonian', className: 'Healer' });
+  assert.equal(classDrawCount(state, 'dark-elf'), 2);
+  state = act(state, { type: 'draw-classes', heroId: 'dark-elf' }, [0, 0]);
+  const offered = state.rewards.heroes['dark-elf'].offered;
+  assert.equal(offered.length, 2);
+  assert.ok(!offered.includes('Healer'));
+  assert.deepEqual(classOptions(state, 'dark-elf'), offered);
 });
 
 test('R p94: declining earned classes costs battle tenacity and items, then chooses from what remains', () => {
@@ -413,6 +446,13 @@ test('Saved-state validation rejects shapes the reducer cannot continue', () => 
     state => { state.rewards = { mode: 'achievements', heroes: {} }; },
     state => { state.pending.check = { phase: 'adjust' }; },
     state => { state.heroes.reverse(); },
+    // Shapes the reducer would crash on: a living enemy or hero off the map,
+    // a faceless status die, unconserved fatigue and two units on one hex.
+    state => { state.enemies[1].position = null; },
+    state => { state.heroes[1].position = null; },
+    state => { state.heroes[1].cooldown = [{ id: 'status-1', kind: 'status' }]; },
+    state => { state.supply.light += 1; },
+    state => { state.enemies[1].position = state.heroes[0].position; },
   ];
   for (const breakState of broken) {
     const copy = structuredClone(valid);

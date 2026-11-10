@@ -32,6 +32,9 @@ const requireRule = (condition, code, message) => { if (!condition) throw new Ja
 const clone = value => structuredClone(value);
 const natural = value => Number.isSafeInteger(value) && value >= 0;
 const TENACITY_MAX = 5;
+/** Finite fatigue supply used by this engine: 20 light and 12 overfatigue dice. */
+const LIGHT_FATIGUE_DICE = 20;
+const OVERFATIGUE_DICE = 12;
 
 export const JAILBREAK_SCHEMA_VERSION = 2;
 /** R p28: an inventory holds eight cards, four of them in ready slots. */
@@ -131,7 +134,7 @@ export function createJailbreak({ players = [{ seat: 0 }], expansions = [] } = {
       { id: 'argonian-bandit', name: 'Argonian Bandit', level: 1, hp: 3, maxHp: 3, defense: 1, range: 3, combat: 1, targets: 2, priority: 'strongest', skill: 'Enfeeble 1', position: '3,7' },
     ],
     cache: createCache(),
-    supply: { light: 20, over: 12 }, nextDieId: 1, enemyQueue: [],
+    supply: { light: LIGHT_FATIGUE_DICE, over: OVERFATIGUE_DICE }, nextDieId: 1, enemyQueue: [],
     achievements: { firstTurn: null, lastTurn: null, firstEscape: null, defeated: {}, rangedDamage: null, meleeDamage: null, lockpick: null },
     rewards: null,
     log: ['Jailbreak: two adventurers, Adept difficulty. Day 1 has not begun.'],
@@ -584,8 +587,8 @@ function lockpickAction(state, hero, action, random) {
  */
 function useItem(state, hero, action) {
   ensurePhase(state, 'start', 'heroes');
-  const item = hero.items.find(entry => entry.code === action.itemCode);
-  requireRule(item?.slot === 'ready', 'ITEM_UNAVAILABLE', 'Only an item in a ready slot can be used during battle.');
+  const item = hero.items.find(entry => entry.code === action.itemCode && entry.slot === 'ready');
+  requireRule(item, 'ITEM_UNAVAILABLE', 'Only an item in a ready slot can be used during battle.');
   requireRule(item.code === 'CO-019', 'ITEM_UNSUPPORTED', 'This item’s effect is not implemented.');
   requireRule(['self', 'party'].includes(action.mode), 'ITEM_CHOICE', 'Choose 3 bonus HP for yourself or 1 bonus HP for each adventurer.');
   hero.items = hero.items.filter(entry => entry !== item);
@@ -602,6 +605,17 @@ function rewardEntry(state, heroId) {
 }
 
 const chosenByOthers = (state, heroId) => Object.entries(state.rewards.heroes).filter(([id, entry]) => id !== heroId && entry.choice).map(([, entry]) => entry.choice);
+/** Earned classes still in the box: an earlier drawing adventurer may have taken one. */
+const keptEarned = (state, heroId) => {
+  const taken = new Set(chosenByOthers(state, heroId));
+  return state.rewards.heroes[heroId].earned.filter(name => !taken.has(name));
+};
+
+/** How many sheets `draw-classes` adds: R p93 draws until the adventurer holds two. */
+export function classDrawCount(state, heroId) {
+  if (state?.phase !== 'rewards' || !state.rewards?.heroes?.[heroId]) return 0;
+  return state.rewards.mode === 'all-defeated' ? 2 : Math.max(0, 2 - keptEarned(state, heroId).length);
+}
 
 /**
  * Classes one adventurer may take right now (R pp93–94). Earned options need
@@ -643,15 +657,16 @@ function drawClasses(state, action, random) {
   // Fewer than two earned options: set those aside, shuffle every other sheet
   // and draw until holding two. If everyone was defeated, the sheets are
   // shuffled once and each adventurer draws two, so earlier draws stay out.
+  const kept = allDefeated ? [] : keptEarned(state, action.heroId);
   const excluded = new Set([...chosenByOthers(state, action.heroId), ...(allDefeated
     ? Object.values(state.rewards.heroes).flatMap(other => other.offered ?? [])
     : entry.earned)]);
   const pool = classPool(state.expansions).filter(name => !excluded.has(name));
   const drawn = [];
-  for (let count = allDefeated ? 2 : 2 - entry.earned.length; count > 0 && pool.length; count--) {
+  for (let count = classDrawCount(state, action.heroId); count > 0 && pool.length; count--) {
     drawn.push(pool.splice(Math.floor(randomUnit(random) * pool.length), 1)[0]);
   }
-  entry.offered = [...(allDefeated ? [] : entry.earned), ...drawn];
+  entry.offered = [...kept, ...drawn];
   const hero = state.heroes.find(item => item.id === action.heroId);
   log(state, `${hero.name} draws class sheets: ${drawn.join(' and ')}.`);
 }
@@ -797,12 +812,15 @@ function validHero(state, hero) {
     hero.maxHp > 0 && hero.hp <= hero.maxHp && hero.tenacity <= TENACITY_MAX && Number.isSafeInteger(hero.ownerSeat) &&
     typeof hero.name === 'string' && typeof hero.race === 'string' && typeof hero.escaped === 'boolean' && typeof hero.racialUsed === 'boolean' &&
     (hero.position === null || Object.hasOwn(cells, hero.position)) && BATTLE_FORMS.includes(hero.form) &&
+    // On the map exactly while undefeated and not escaped; the closing rest clears the map.
+    (hero.position === null) === (hero.hp === 0 || hero.escaped || state.phase === 'complete') &&
     (hero.className === null || isClassAvailable(hero.className, state.expansions)) &&
     Array.isArray(hero.dice) && hero.dice.every(die => die && typeof die.id === 'string' && Object.hasOwn(SKILLS, die.skill) &&
       DIE_STATES.has(die.state) && (die.face === null || isFace(die.face))) &&
     new Set(hero.dice.map(die => die.id)).size === hero.dice.length && hero.dice.filter(die => die.state === 'active').length <= 4 &&
     Array.isArray(hero.cooldown) && hero.cooldown.length <= COOLDOWN_CAPACITY &&
-    hero.cooldown.every(die => die && typeof die.id === 'string' && COOLDOWN_KINDS.has(die.kind)) &&
+    hero.cooldown.every(die => die && typeof die.id === 'string' && die.id.trim() && COOLDOWN_KINDS.has(die.kind) &&
+      (die.kind !== 'status' || (typeof die.face === 'string' && Boolean(die.face.trim())))) &&
     new Set(hero.cooldown.map(die => die.id)).size === hero.cooldown.length &&
     hero.dice.every(die => (die.state === 'cooldown') === hero.cooldown.some(queued => queued.kind === 'skill' && queued.id === die.id)) &&
     hero.cooldown.filter(die => die.kind === 'skill').every(queued => hero.dice.some(die => die.id === queued.id)) &&
@@ -817,7 +835,8 @@ function validPending(state, heroIds) {
     case 'roll':
       return Boolean(pending) && pending.heroId === active.id && BATTLE_FORMS.includes(pending.form) &&
         (pending.targetId === null || state.enemies.some(enemy => enemy.id === pending.targetId)) &&
-        Array.isArray(pending.results) && pending.results.every(result => result && typeof result.dieId === 'string' &&
+        Array.isArray(pending.results) && new Set(pending.results.map(result => result?.dieId)).size === pending.results.length &&
+        pending.results.every(result => result && typeof result.dieId === 'string' &&
           Object.hasOwn(SKILLS, result.skill) && isFace(result.face) && active.dice.some(die => die.id === result.dieId && die.state === 'rolled'));
     case 'enemy-defense':
       return Boolean(pending) && heroIds.includes(pending.heroId) && state.enemies.some(enemy => enemy.id === pending.enemyId) &&
@@ -867,7 +886,15 @@ export function isJailbreakState(state) {
     if (!Array.isArray(state.enemies) || !state.enemies.length || !state.enemies.every(enemy => enemy && typeof enemy.id === 'string' && typeof enemy.name === 'string' &&
       ['hp', 'maxHp', 'level', 'defense', 'range', 'combat', 'targets'].every(key => natural(enemy[key])) && enemy.hp <= enemy.maxHp &&
       ['strongest', 'weakest'].includes(enemy.priority) && typeof enemy.skill === 'string' &&
-      (enemy.position === null || Object.hasOwn(cells, enemy.position)))) return false;
+      (enemy.hp > 0 ? Object.hasOwn(cells, enemy.position) : enemy.position === null))) return false;
+    if (new Set(state.enemies.map(enemy => enemy.id)).size !== state.enemies.length ||
+      !state.enemyQueue.every(id => state.enemies.some(enemy => enemy.id === id))) return false;
+    const positions = [...state.heroes, ...state.enemies].map(unit => unit.position).filter(position => position !== null);
+    if (new Set(positions).size !== positions.length) return false;
+    // Physical fatigue dice are conserved between the supply and the cooldown tracks.
+    const tracks = state.heroes.flatMap(hero => hero.cooldown);
+    if (state.supply.light + tracks.filter(die => die.kind === 'light-fatigue').length !== LIGHT_FATIGUE_DICE ||
+      state.supply.over + tracks.filter(die => die.kind === 'overfatigue').length !== OVERFATIGUE_DICE) return false;
     const cache = state.cache;
     if (!cache || cache.position !== CACHE_HEX || typeof cache.present !== 'boolean' || !Object.hasOwn(ITEMS, cache.itemCode) ||
       cache.present !== (cache.result === null) || !(cache.result === null || CACHE_RESULTS.has(cache.result)) ||
