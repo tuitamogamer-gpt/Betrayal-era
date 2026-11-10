@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { spawn } from 'node:child_process';
+import { createJailbreak } from '../src/tabletop/engine.js';
 
 test('tabletop combat uses real moves and dice, preserves choices and reloads its own save', async ({ page }) => {
   const errors = [];
@@ -59,6 +60,54 @@ test('malformed saved roll restores a fresh playable encounter', async ({ page }
   await page.reload();
   await expect(page.locator('[data-action="begin-turn"]')).toBeVisible();
   await expect(page.locator('.notice')).toContainText('fresh encounter');
+});
+
+test('cache lockpick, item and class rewards finish the Jailbreak introduction and survive reload', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  // The Argonian starts two hexes from the cache; both bandits are already down.
+  const seeded = createJailbreak();
+  seeded.heroes[0].position = '4,4';
+  seeded.enemies.forEach(enemy => { enemy.hp = 0; enemy.position = null; });
+  await page.addInitScript(([save]) => {
+    if (!sessionStorage.getItem('seeded')) {
+      localStorage.setItem('betrayal.tabletop.jailbreak.v1', save);
+      sessionStorage.setItem('seeded', '1');
+    }
+    // Lockpick dice 5, 2, 2; then the first sheet of the Dark Elf's class draw.
+    const rolls = [4 / 6 + 0.01, 1 / 6 + 0.01, 1 / 6 + 0.01, 0];
+    Math.random = () => rolls.length ? rolls.shift() : 0.4;
+  }, [JSON.stringify({ state: seeded, savedAt: 1 })]);
+  await page.goto('/tabletop.html');
+  await expect(page.locator('.hex-group.cache')).toHaveCount(1);
+  await page.locator('[data-action="begin-turn"]').click();
+  await page.locator('[data-hex="2,4"]').click();
+  await expect(page.locator('.lockpick-card')).toContainText('5 · 2 · 2');
+  await page.locator('[data-action="lockpick-roll"]').click();
+  await expect(page.locator('.lock-die.matched')).toHaveCount(3);
+  await page.locator('[data-action="lockpick-resolve"]').click();
+  await page.locator('[data-action="cache-item"][data-placement="ready"]').click();
+  await expect(page.locator('.hex-group.cache')).toHaveCount(0);
+  await expect(page.locator('.turn-banner')).toContainText('continue moving');
+  await page.locator('[data-action="use-item"][data-mode="party"]').click();
+  await expect(page.locator('.bonus-hp')).toHaveCount(2);
+  await page.locator('[data-action="end-turn"]').click();
+  await page.locator('[data-action="begin-turn"]').click();
+  await page.locator('[data-action="end-turn"]').click();
+  await expect(page.locator('.rewards-panel')).toContainText('Succeed at Cache Lockpick');
+  await expect(page.locator('.bonus-hp')).toHaveCount(0);
+  await expect(page.locator('[data-action="draw-classes"]')).toHaveCount(0);
+  await page.locator('[data-action="choose-class"][data-hero="argonian"][data-class="Rogue"]').click();
+  await page.locator('[data-action="draw-classes"][data-hero="dark-elf"]').click();
+  await page.locator('[data-action="choose-class"][data-hero="dark-elf"][data-class="Acrobat"]').click();
+  await expect(page.locator('.end-card')).toContainText('Ready for Day 1');
+  await expect(page.locator('.reward-card')).toHaveCount(2);
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('betrayal.tabletop.jailbreak.v1')).state);
+  expect(saved.heroes.map(hero => hero.className)).toEqual(['Rogue', 'Acrobat']);
+  expect(saved.partyXp).toBe(2);
+  await page.reload();
+  await expect(page.locator('.end-card')).toContainText('Argonian: Rogue');
+  expect(errors).toEqual([]);
 });
 
 test.describe('authoritative shared tabletop in two browsers', () => {

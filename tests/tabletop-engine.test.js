@@ -165,7 +165,9 @@ test('R93: escape only at start; victory waits for end of round and undefeated h
   state=act(state,{type:'escape'});
   assert.equal(state.heroes[0].escaped,true); assert.equal(state.phase,'start'); assert.equal(state.outcome,null);
   state=act(state,{type:'escape'});
-  assert.equal(state.outcome,'victory'); assert.equal(state.phase,'complete');
+  assert.equal(state.outcome,'victory'); assert.equal(state.phase,'rewards');
+  assert.equal(state.achievements.firstEscape,'argonian');
+  assert.deepEqual(state.rewards.heroes.argonian.achievements,['escape-first','first-turn']);
   state=startHero(createJailbreak()); state.heroes[0].position='0,2';
   assert.throws(()=>act(state,{type:'escape'}),{code:'WRONG_PHASE'});
   state=startHero(createJailbreak()); state.enemies.forEach(enemy=>{enemy.hp=0;enemy.position=null;});

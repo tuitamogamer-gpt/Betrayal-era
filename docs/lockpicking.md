@@ -1,6 +1,6 @@
 # Lockpicking foundation
 
-Source: official [Rulebook v1.0](https://www.dropbox.com/scl/fi/w8kkq9m6gwcwaawien7cw/TES_Rulebook.pdf?rlkey=tz1ctc1cc0ttummjzzx5xt24i&dl=0), printed pp68–70, and [extended tutorial](https://www.dropbox.com/scl/fi/4qs75zew966mo5x34xo60/TES_Tutorial_Online.pdf?rlkey=63ep6fiz174wk9rvqferu8qts&dl=0), p19. These links originate on the publisher's [support page](https://chiptheorygames.com/pages/support/the-elder-scrolls).
+Source: official [Rulebook v1.0](https://www.dropbox.com/scl/fi/w8kkq9m6gwcwaawien7cw/TES_Rulebook.pdf?rlkey=tz1ctc1cc0ttummjzzx5xt24i&dl=0), printed pp68–70, and [extended tutorial](https://www.dropbox.com/scl/fi/4qs75zew966mo5x34xo60/TES_Tutorial_Online.pdf?rlkey=63ep6fiz174wk9rvqferu8qts&dl=0), p19. These links originate on the publisher's [support page](https://chiptheorygames.com/pages/support/the-elder-scrolls). The same links now serve Rulebook v1.1 and Tutorial v1.1; pp.68–70 and T p19 were re-read on 2026-11-10 and describe the same procedure, example numbers and item.
 
 `src/tabletop/lockpicking.js` implements a pure check with injected rolls and choices. It covers the published three-digit common code and the example containing one prerequisite key digit plus three ordinary digits. Other code structures are explicitly unsupported, pending component evidence.
 
@@ -25,10 +25,20 @@ The public tutorial deliberately fixes the item on top of the common deck. Norma
 
 The pictured card on T p5 was visually verified: **CO-019**, common consumable, Meat trait. Consuming it discards the item and gives either its user 3 bonus HP or every adventurer 1 bonus HP. This adds bonus HP, not ordinary healing. R p28 allows an item without specific timing during deployment or its owner's turn, with battle use restricted to ready items. Inventory holds 8 cards total, with 4 ready slots; a newly gained item may be placed immediately into a ready slot, moving an existing item into the pack if needed. R p29 requires a consumable to be discarded after its single use. R p20 requires bonus HP to absorb physical damage first, allows it beyond the Health maximum, and excludes it from true-damage absorption and enemy strongest/weakest priority. R p86 clears remaining bonus HP after battle. The lockpick module intentionally leaves this verified item effect and those inventory rules to the encounter engine.
 
-## Tests and remaining integration
+## Encounter integration
 
-Run `node --test tests/tabletop-lockpicking.test.js`.
+`src/tabletop/engine.js` applies this module to the Jailbreak cache (actions `lockpick-roll`, `lockpick-adjust`, `lockpick-resolve`, `lockpick-stop`, `lockpick-decline` and `cache-item`):
 
-Tests cover the exact common and legendary examples, repeated digits, preservation only through kept dice, key gating/reuse, attempt exhaustion, voluntary stopping, all normal cache outcomes, non-wrapping adjustment cost, phase validation and immutability.
+- The server supplies every lockpick roll; a client can choose only which dice to keep.
+- Each adjustment's whole fatigue cost is paid through the adventurer's actual cooldown track and the finite fatigue supply before the proposed check state is committed. Light fatigue falls back to overfatigue when the silver supply is empty (R23); with no fatigue dice left at all, the adjustment is refused.
+- The check interrupts the move that entered the cache hex. Afterwards the unused hexes of that move may be moved without a new move action, until an engagement or the end of the turn.
+- Declining before the first roll leaves the cache in place. Once rolled, the check continues until success, failure or a voluntary stop.
+- Success records the achievement; the item goes to a ready slot or the pack, or is left. Failure and stopping discard the cache and cycle the card.
 
-Still external: server-authoritative randomness/event synchronization; moving into or being placed in the cache hex; player ownership and interruption/resumption; fatigue supply/fallback/overflow; item deck order and item abilities; race/class overrides (e.g. automatic lockpick success); trap effects; multiple-key or other longer code structures not exercised by the inspected examples. This foundation alone is not the complete Jailbreak or campaign engine.
+## Tests and remaining scope
+
+Run `node --test tests/tabletop-lockpicking.test.js tests/tabletop-jailbreak-flow.test.js`.
+
+The module tests cover the exact common and legendary examples, repeated digits, preservation only through kept dice, key gating/reuse, attempt exhaustion, voluntary stopping, all normal cache outcomes, non-wrapping adjustment cost, phase validation and immutability. The encounter tests replay the tutorial's lockpick inside the full battle and cover declining, continuing movement, failure, stopping, fatigue payment and inventory placement.
+
+Still outside this foundation: item deck order beyond the tutorial's fixed top card, other items' abilities, race/class overrides (e.g. automatic lockpick success), trap effects, multiple-key or longer code structures, and caches placed by other encounters or abilities.

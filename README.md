@@ -2,7 +2,7 @@
 
 ## Published tabletop adaptation: in development
 
-The goal is the actual Chip Theory Games tabletop game with automatic rules, solo play and online co-op. New work lives in `src/tabletop/` and is playable at **`/tabletop.html`** as a **Jailbreak combat alpha** with the tutorial's fixed two-adventurer setup. It is not the complete campaign. [Scope, verified sources and remaining work](docs/TABLETOP-PORT.md).
+The goal is the actual Chip Theory Games tabletop game with automatic rules, solo play and online co-op. New work lives in `src/tabletop/` and is playable at **`/tabletop.html`**: the complete **Jailbreak Introduction encounter** with the tutorial's fixed two-adventurer setup. It covers the battle, the common cache's lockpick check and its Falkreath Meat Loaf, the achievements checklist, end-of-battle cleanup, class rewards and the closing rest. It is not the complete campaign: class abilities, the random five-enemy draw, the one-adventurer solo setup and Day 1 onward are not connected. [Scope, verified sources and remaining work](docs/TABLETOP-PORT.md).
 
 Run `npm run test:tabletop` for the new rules and multiplayer tests. Online rooms require connected private Vercel Blob storage; without it the API explicitly reports that online play is unavailable. [Networking setup](docs/tabletop-network.md).
 

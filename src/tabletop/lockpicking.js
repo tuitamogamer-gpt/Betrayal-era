@@ -15,8 +15,9 @@ export const JAILBREAK_CACHE_FIXTURE = Object.freeze({
   digits: Object.freeze([5, 2, 2]),
   attemptLimit: 3,
   keyDigit: null,
+  itemCode: 'CO-019',
   itemName: 'Falkreath Meat Loaf',
-  source: Object.freeze({ document: 'Rulebook v1.0', page: 69, tutorialPage: 19 }),
+  source: Object.freeze({ document: 'Rulebook v1.0 (unchanged in v1.1)', page: 69, tutorialPage: 19 }),
 });
 
 function validateCode({ digits, attemptLimit, keyDigit }) {
@@ -45,6 +46,12 @@ function validateCheck(check) {
   if (['adjust', 'continue'].includes(check.phase) && !check.dice.every(isFace)) {
     throw new TypeError('An active lockpick attempt requires three die results.');
   }
+}
+
+/** Throws a TypeError unless `check` is a well-formed lockpick check state. */
+export function assertLockpickCheck(check) {
+  validateCheck(check);
+  return check;
 }
 
 export function createLockpickCheck({ digits, attemptLimit, keyDigit = null }) {

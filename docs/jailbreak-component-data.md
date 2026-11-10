@@ -1,6 +1,6 @@
 # Jailbreak: factual component data and implementation boundaries
 
-Research date: 2026-11-01. This document records mechanics and component facts, not the scenario's story prose. `R` means the printed page in the official Rulebook; `T` means the printed page in the official Extended Tutorial; `SS` means the PDF page in the official Base Skill Sheets. Official source links are catalogued in [tabletop-assets-research.md](tabletop-assets-research.md).
+Research date: 2026-11-01; updated 2026-11-10 when the cache, item, cleanup and class rewards were implemented. Those additions were checked against the publisher's current downloads, which are now Rulebook v1.1 and Extended Tutorial v1.1 (see [rules research](tabletop-rules-research.md#source-update-2026-11-10)). This document records mechanics and component facts, not the scenario's story prose. `R` means the printed page in the official Rulebook; `T` means the printed page in the official Extended Tutorial; `SS` means the PDF page in the official Base Skill Sheets. Official source links are catalogued in [tabletop-assets-research.md](tabletop-assets-research.md).
 
 ## Feasible first slice
 
@@ -132,7 +132,7 @@ R57, R59–64 specify:
 5. Choose/change battle form, declare an eligible target if the form has one, gather available legal dice within the relevant stat limits, roll, then perform rerolls/modifications before resolving selected abilities individually in a chosen order.
 6. Resolve after-engage reactions. All damage to one unit during that action is one damage instance; defense does not reset separately for each die. True damage bypasses ordinary defense and prevention.
 7. After adventurers and any companions, enemies act from highest level to lowest. The party chooses the order of equal-level enemies. All Jailbreak enemies are level 1.
-8. An enemy moves only if no targetable opponent is already in range and sight. Its destination is the closest reachable hex that puts at least one targetable opponent in range. It moves up to two hexes and stops upon reaching that destination, even if it could continue to target more units. R64 defines nearest-opponent/priority/party decisions for ambiguous destinations; preserve these decisions instead of adding an invented AI preference.
+8. An enemy moves only if no targetable opponent is already in range and sight. Its destination is the closest unoccupied hex, reached through unoccupied hexes, that puts at least one targetable opponent in range and sight. It moves up to two hexes along that route and stops upon reaching the destination, even if it could continue to target more units. Among equally close destinations its **priority icon** decides: prefer destinations from which the strongest (or weakest) such opponent would be targetable; remaining ties are a party decision, and the number of possible targets is ignored (R64 v1.1 and the official [Enemy movement FAQ](https://support.chiptheorygames.com/support/solutions/articles/33000292544-enemy-movement-how-does-it-work-in-more-detail-)). Without any destination, the enemy approaches the closest opposing unit as far as it can. The earlier engine broke destination ties toward the closest opponent instead; this was corrected on 2026-11-10 with a regression test.
 9. An enemy determines its target list in priority order, rolls its Combat dice **once**, and applies the same sum to each target. Each target can use its own prevention. Resolve relevant after-engage skills for every target.
 10. Check completion at the end of the round, after end-of-round effects.
 
@@ -144,15 +144,45 @@ The item is a common consumable of type Meat. Its mechanical effect is to discar
 
 A lockpick check can interrupt a move into the cache hex. First roll all three ordinary D6. Later attempts may keep selected results. Each gained light fatigue changes one die result by one, without wrapping between 1 and 6. Success discards the cache and gains the item; failure also discards the cache and cycles the item. A completed check resumes any remaining movement (R68–69).
 
+Implementation (2026-11-10), from R pp.20, 28–29, 59, 61, 68–70 and 89:
+
+- Ending a move on the cache hex during the adventurer's own turn offers the check; declining leaves the cache in place, and passing through it without stopping is the same as declining. The offer records the unused hexes of that move, which may be moved afterwards without a new move action. An engagement ends the interrupted move (R59).
+- The server rolls the lockpick dice. Each ±1 adjustment gains one light fatigue through the actual cooldown track, or overfatigue once no light fatigue remains (R23). An adjustment is refused when the supply cannot pay its whole cost (R61, cost paid in full).
+- Success records the **Succeed at Cache Lockpick** achievement even if the item is left. The item may go into a ready slot or the pack (R28) or be left, discarding card and chip. Inventories that are already full are refused rather than rearranged; this encounter has only one cache.
+- The Falkreath Meat Loaf is used only from a ready slot during its owner's turn (R28: no stated timing). Its user discards it, then gains 3 bonus HP or every adventurer still on the map gains 1 bonus HP. R89 lets the resolving adventurer give another adventurer less than the stated bonus HP; that never helps in this encounter, so the full amount is applied.
+- Bonus HP is removed first when an adventurer takes enemy damage, never by true damage, and never counts toward strongest/weakest priority (R20, R55, R63). Damage absorbed by bonus HP is still damage taken for the two first-damage achievements; prevented damage is not.
+
 ## Escape, completion, and rewards
 
 At the **start of its turn**, an adventurer occupying `(0,2)`, `(0,4)`, or `(0,6)` may escape. Remove it from the map; its turn ends and it takes no more turns. Reaching an exit during movement does not immediately escape (R93).
 
 At the **end of the round**, the battle ends if all enemies are defeated, all adventurers are defeated, or all undefeated adventurers have escaped. Other heroes still receive their turns in a round where the last enemy was defeated (T21). Jailbreak awards class choices, not encounter XP.
 
-Track the published achievements: defeat each named enemy; succeed at cache lockpick; escape first; take the first turn; take the last turn; first to take enemy damage at range 2+; first to take enemy damage at range 1. R94 maps achievements to classes. The tutorial results offer Argonian Acrobat/Scout/Dragonknight/Rogue/Archer and Dark Elf Sorcerer/Healer; actual achievements may differ in live play. Do not award these scripted example outcomes automatically.
+Track the published achievements: defeat each named enemy; succeed at cache lockpick; escape first; take the first turn; take the last turn; first to take enemy damage at range 2+; first to take enemy damage at range 1. The tutorial results offer Argonian Acrobat/Scout/Dragonknight/Rogue/Archer and Dark Elf Sorcerer/Healer; actual achievements may differ in live play. Do not award these scripted example outcomes automatically.
 
-After class rewards and cleanup, set party XP to 2, retain zero saved XP, heal heroes to maximum, and clear the whole cooldown track. Day remains unset until normal campaign play begins (R94). Transitioning to the full campaign requires content not supplied by this battle implementation.
+End of battle cleanup (R86 with the Jailbreak instructions on R93): remove bonus HP, exhaust every die still in an active slot, recover drained dice and leave the cooldown track as it is. Tenacity and items gained in battle are kept unless the adventurer declines its achievement classes.
+
+Class rewards, transcribed from Rulebook v1.1 p94 and matching the worked example on Tutorial v1.1 p22. *VW* classes need the Valenwood expansion and are offered only when it is in play (`createJailbreak({ expansions: ['valenwood'] })`).
+
+| Achievement | Classes |
+| --- | --- |
+| Defeat High Elf Bandit | Arcanist (VW), Sorcerer |
+| Defeat Argonian Bandit | Acrobat, Scout |
+| Defeat Skeever Pup | Nightblade, Warden |
+| Defeat Skeleton | Necromancer, Spellsword |
+| Defeat Spriggan | Pilgrim, Templar |
+| Succeed at Cache Lockpick | Burglar (VW), Rogue |
+| Escape First | Bard, Ranger (VW) |
+| Take the First Turn | Dragonknight |
+| Take the Last Turn | Healer |
+| First to Take Damage from an Enemy at Range 2+ | Archer |
+| First to Take Damage from an Enemy at Range 1 | Knight |
+
+Each adventurer chooses one class sheet; sheets are unique. An adventurer with fewer than two earned classes waits until the others have chosen, sets aside its earned sheet (if any), shuffles every other remaining sheet and draws until holding two, then chooses one. Several such adventurers draw one at a time. An adventurer may instead decline its earned classes: it loses all tenacity and discards the items gained in the battle, then chooses any class remaining after the others. If every adventurer was defeated, the sheets are shuffled once and each adventurer draws two and chooses one (R93–94).
+
+Two derived conventions are recorded in `src/tabletop/engine.js`: an adventurer who declines chooses last (read literally, it and a drawing adventurer would each wait for the other), and a drawn, non-achievement class chosen through the fewer-than-two procedure carries no penalty, because that procedure is the rulebook's normal path for such an adventurer.
+
+After class rewards, set party XP to 2, retain zero saved XP, heal heroes to maximum, and clear the whole cooldown track. Day remains unset until normal campaign play begins (R94). Choosing the starting guild quest (R13 step 7) and the rest of the campaign require content not supplied by this encounter implementation.
 
 ## Validation fixtures and remaining scope
 
@@ -162,6 +192,6 @@ After class rewards and cleanup, set party XP to 2, retain zero saved XP, heal h
 - T16: Argonian Bandit's result 2 applies to both heroes. Argonian uses one shield-1, loses one HP, and gains Enfeeble fatigue. Dark Elf uses two Combat-1 shields, loses no HP, and still gains Enfeeble fatigue.
 - T20: Combat-2 plus Shield Discipline-2 deals 4 against Argonian Bandit's defense 1, causing 3 HP loss and defeat. Shield Discipline stays active; Combat exhausts.
 
-The fixed tutorial slice does not establish implementation of every class, true-solo customization, every item, random full-game encounters, campaign progression, or all enemy skills. These must not be implied by the presence of a complete first battle. Network authority, action validation, turn ownership, reconnection, and save compatibility are software concerns that require separate tests.
+The fixed tutorial slice does not establish implementation of every class's abilities, true-solo customization, every item, random full-game encounters, campaign progression, or all enemy skills. These must not be implied by the presence of a complete first battle. Network authority, action validation, turn ownership, reconnection, and save compatibility are software concerns that require separate tests.
 
 Local visual evidence is in `scratch/tabletop-assets/jailbreak/` and `scratch/tabletop-assets/jailbreak-dice/`. It includes official rendered pages, community texture crops, Workshop metadata, and the decoded TTS state. These are research inputs only, not application assets.

@@ -6,6 +6,7 @@ import { MemoryRoomStore } from '../server/tabletop/memory-store.js';
 import { createTabletopHandler } from '../server/tabletop/http-api.js';
 import { createJailbreakService } from '../server/tabletop/jailbreak-service.js';
 import { RoomError } from '../server/tabletop/room-service.js';
+import { createJailbreak, reduceJailbreak } from '../src/tabletop/engine.js';
 
 // Minimal stand-in tests the exact real-engine seat contract without asserting
 // this counter models a tabletop encounter. Real encounter tests are separate.
@@ -36,7 +37,14 @@ async function app(t, options = {}, useRealEngine = false) {
     });
     return { status: response.status, headers: response.headers, body: await response.json() };
   }
-  return { url, request };
+  return { url, request, service };
+}
+
+/** Replace a started room's game state, as a trusted test fixture. */
+async function replaceGame(service, roomId, game) {
+  const room = await service.store.get(roomId);
+  assert.ok(await service.store.compareAndSwap(roomId, room.revision, { ...room, game, revision: room.revision + 1 }));
+  return room.revision + 1;
 }
 
 test('two actual HTTP clients create, join, start, authorize turns, retry and reconnect', async t => {
@@ -149,4 +157,61 @@ test('real Jailbreak engine enforces two HTTP players through movement, roll res
   assert.equal(resumed.game.heroes[0].position, '4,2');
   assert.equal(resumed.game.activeHero, 1);
   assert.equal(resumed.self.seat, 1);
+});
+
+test('real engine: lockpick dice come from the server and only each owner chooses its class reward', async t => {
+  const { request, service } = await app(t, {}, true);
+  const host = (await request({ operation: 'create', name: 'Argonian player' })).body;
+  const guest = (await request({ operation: 'join', roomId: host.roomId, name: 'Dark Elf player' })).body;
+  const unsupported = await request({ operation: 'start', roomId: host.roomId, expectedRevision: 1, requestId: 'start_bad_01', options: { enemies: 5 } }, host.token);
+  assert.equal(unsupported.status, 400);
+  assert.equal(unsupported.body.error.code, 'UNSUPPORTED_OPTIONS');
+  let snapshot = (await request({ operation: 'start', roomId: host.roomId, expectedRevision: 1, requestId: 'start_vw_001', options: { expansions: ['valenwood'] } }, host.token)).body.snapshot;
+  assert.deepEqual(snapshot.game.expansions, ['valenwood']);
+  let count = 0;
+  async function command(player, action) {
+    const result = await request({ operation: 'action', roomId: host.roomId, expectedRevision: snapshot.revision, requestId: `flow_action_${++count}`, action }, player.token);
+    if (result.status === 200) snapshot = result.body.snapshot;
+    return result;
+  }
+
+  // The Argonian starts two hexes from the cache.
+  const placed = structuredClone(snapshot.game);
+  placed.heroes[0].position = '4,4';
+  snapshot.revision = await replaceGame(service, host.roomId, placed);
+  assert.equal((await command(host, { type: 'begin-turn' })).status, 200);
+  assert.equal((await command(host, { type: 'move', to: '2,4' })).status, 200);
+  assert.equal(snapshot.game.phase, 'lockpick');
+  assert.equal((await command(guest, { type: 'lockpick-roll' })).status, 403);
+  assert.equal((await command(host, { type: 'lockpick-roll', results: [5, 2, 2], dice: [5, 2, 2] })).status, 200);
+  const check = snapshot.game.pending.check;
+  assert.equal(check.attemptsUsed, 1);
+  assert.ok(check.dice.every(value => Number.isInteger(value) && value >= 1 && value <= 6));
+  const invalid = await command(host, { type: 'lockpick-adjust', dieIndex: 7, delta: 1 });
+  assert.equal(invalid.status, 400);
+  assert.equal(invalid.body.error.code, 'LOCKPICK_RULE');
+
+  // Finish a battle with chosen achievements, then resolve rewards over HTTP.
+  let game = createJailbreak({ players: [{ seat: 0 }, { seat: 1 }] });
+  game.enemies.forEach(enemy => { enemy.hp = 0; enemy.position = null; });
+  for (const type of ['begin-turn', 'end-turn', 'begin-turn', 'end-turn']) game = reduceJailbreak(game, { type });
+  assert.equal(game.phase, 'rewards');
+  snapshot.revision = await replaceGame(service, host.roomId, game);
+  assert.deepEqual(game.rewards.heroes.argonian.earned, ['Dragonknight']);
+  assert.equal((await command(guest, { type: 'draw-classes', heroId: 'argonian' })).status, 403);
+  assert.equal((await command(host, { type: 'draw-classes', heroId: 'argonian' })).status, 200);
+  const offered = snapshot.game.rewards.heroes.argonian.offered;
+  assert.equal(offered.length, 2);
+  const waiting = await command(guest, { type: 'draw-classes', heroId: 'dark-elf' });
+  assert.equal(waiting.status, 400);
+  assert.equal(waiting.body.error.code, 'WAIT_FOR_CHOICES');
+  assert.equal((await command(host, { type: 'choose-class', heroId: 'argonian', className: offered[1] })).status, 200);
+  assert.equal((await command(host, { type: 'draw-classes', heroId: 'dark-elf' })).status, 403);
+  assert.equal((await command(guest, { type: 'draw-classes', heroId: 'dark-elf' })).status, 200);
+  const darkElfOffer = snapshot.game.rewards.heroes['dark-elf'].offered;
+  assert.ok(!darkElfOffer.includes(offered[1]));
+  assert.equal((await command(guest, { type: 'choose-class', heroId: 'dark-elf', className: darkElfOffer[0] })).status, 200);
+  assert.equal(snapshot.game.phase, 'complete');
+  assert.deepEqual(snapshot.game.heroes.map(hero => hero.className), [offered[1], darkElfOffer[0]]);
+  assert.equal(snapshot.game.partyXp, 2);
 });

@@ -29,6 +29,14 @@ The implementation target is the downloaded **v1.0 rulebook plus applicable offi
 - [Item card count correction](https://support.chiptheorygames.com/support/solutions/articles/33000292376-item-card-count-should-be-100-common-60-legendary) corrects the printed inventory to **100 common items and 60 legendary items**.
 - [Drained dice correction to R p23](https://support.chiptheorygames.com/support/solutions/articles/33000292517-recover-dice-section-in-rulebook-pg-23-re-drained-dice) replaces the erroneous End of Day rest timing with **End of Battle Cleanup**. Rest does not recover drained dice.
 
+### Source update 2026-11-10
+
+The publisher's support-page links now download **Rulebook version 1.1** (PDF created 2026-11-09) and **Tutorial Guide online version 1.1** (2026-11-05). The official FAQ's "Gameplay Adjustments for v1.1" folder lists one adjustment, [running out of overfatigue dice](https://support.chiptheorygames.com/support/solutions/articles/33000314949-running-out-of-overfatigue-dice): v1.1 deals 1 true damage for each overfatigue that cannot be placed, while v1.0 places nothing. The v1.1 R p21 contains that adjustment.
+
+- The combat engine remains verified against v1.0 and keeps the v1.0 overfatigue behavior. A complete page-by-page v1.0→v1.1 comparison of the combat rules has not been made, so a move to v1.1 must be an explicit, tested change rather than an unlabelled mixture.
+- The pages used for the 2026-11-10 additions were read in v1.1: R pp.20, 28–29, 59–61, 63–64, 68–70, 86, 89 and 92–94; T pp.5 and 19–22. Their cache procedure, example numbers, item, achievements list, cleanup and closing rest agree with the v1.0 facts recorded in this repository on 2026-11-01. The achievement-to-class table was first transcribed from v1.1 p94; the tutorial's worked example corroborates its Jailbreak entries.
+- The official [Enemy movement FAQ](https://support.chiptheorygames.com/support/solutions/articles/33000292544-enemy-movement-how-does-it-work-in-more-detail-) (in the general Combat folder, not a v1.1 adjustment) and v1.1 R p64 resolve equally close destinations by the enemy's priority icon, then by party decision. The engine previously broke such ties toward the closest opponent; it now follows the FAQ.
+
 Argonian Resistance's general damage prevention does not mention true damage, so R p63 prevents it from blocking true damage. Its availability should be checked when physical damage would be dealt, before subtracting bonus or normal HP.
 
 ## What the actual game is
@@ -149,8 +157,8 @@ Required fixture data still to transcribe/verify before calling this playable:
 1. Exact hex graph, cache/enemy/exit positions from R p92 and T p10 diagrams.
 2. Full level1 profiles and skills for the selected enemies; preferably all five for variable party-size/random setup. Text-only extraction cannot reliably read the numbers/icons on the pictured chips.
 3. Combat, Shield Discipline and Force Shock face multiplicities and abilities from SS, including active/status behavior and damage prevention.
-4. Common-cache lockpicking dice and sequence, plus the selected item result. R pp68–70 and T p19 were subsequently verified and implemented as a separate pure foundation in `src/tabletop/lockpicking.js`; see [lockpicking notes](lockpicking.md). The exact tutorial uses code 5-2-2, three attempts and Falkreath Meat Loaf. Its item effect was visually verified from T p5, but encounter integration remains separate.
-5. Achievement-to-class reward mapping and the relevant CS class records, followed by cleanup and readiness to start Day1.
+4. Common-cache lockpicking dice and sequence, plus the selected item result. R pp68–70 and T p19 were verified and implemented in `src/tabletop/lockpicking.js` and, since 2026-11-10, integrated into the encounter; see [lockpicking notes](lockpicking.md). The exact tutorial uses code 5-2-2, three attempts and Falkreath Meat Loaf, whose effect was visually verified from T p5.
+5. Achievement-to-class reward mapping, followed by cleanup and readiness to start Day1. Implemented on 2026-11-10 from R pp93–94 ([table](jailbreak-component-data.md#escape-completion-and-rewards)); the CS class abilities themselves are not implemented.
 6. Recorded random inputs and choices from the tutorial, checked step-by-step against state snapshots. A faithful free-play mode should use these mechanics with normal random inputs; a tutorial mode can replay prescribed outcomes.
 
 The extended tutorial's later fixture also uses specific overland cards, two delve cards, three guild choices, common/legendary items and a side quest (T pp4–5). Those are a useful next bounded integration target; they do not constitute the full base-game card library.

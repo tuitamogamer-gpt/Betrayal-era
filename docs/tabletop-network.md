@@ -34,6 +34,18 @@ const service = new RoomService({
 
 `viewGame` is synchronous. Its default returns the whole shared game state, so an engine containing hidden future content must provide an appropriate projection. The room service always filters its own credential and receipt fields regardless of this projection.
 
+### Jailbreak binding
+
+`server/tabletop/jailbreak-service.js` binds the Jailbreak engine with a capacity of two seats. Authorization is decided from trusted server state, never from the client's claims:
+
+| Actions | Authorized player |
+| --- | --- |
+| `begin-turn`, `escape`, `move`, `engage`, `resolve`, `end-turn`, `dismiss-active`, `racial`, `use-item`, `lockpick-roll`, `lockpick-adjust`, `lockpick-resolve`, `lockpick-stop`, `lockpick-decline`, `cache-item` | Owner of the active adventurer |
+| `defend` | Owner of the adventurer currently being attacked |
+| `choose-class`, `draw-classes`, `decline-earned-classes` | Owner of the adventurer named by `heroId` |
+
+The server generates every combat, enemy, lockpick and class-draw random result. The only start option is `{expansions: ['valenwood']}`, which adds the Valenwood classes to the rewards; any other option fails with `UNSUPPORTED_OPTIONS`. Rooms created before schema 2 are upgraded by the engine on their next action.
+
 ## Service methods
 
 | Method | Arguments | Result |
@@ -105,4 +117,4 @@ Run `npm run dev:tabletop-api` for the explicit local API on `127.0.0.1:3001`, t
 
 ## Verification
 
-Run `node --test tests/tabletop-rooms.test.js tests/tabletop-api.test.js`. Tests cover credential handling, parallel seat allocation, host-only start, engine turn ownership, stale writes, rule rejection, replay-safe retries, simultaneous commands, unavailable engines, payload validation, input/snapshot immutability, view projection, conditional Blob operations across separate adapter instances, and actual HTTP requests. A real Jailbreak-engine test exercises two players through turn ownership, movement, a Combat roll, resolution, turn handoff and reconnect, and confirms that injected client dice outcomes cannot replace server randomness. Blob tests use a contract fake; they are not evidence of a successful production storage connection.
+Run `node --test tests/tabletop-rooms.test.js tests/tabletop-api.test.js`. Tests cover credential handling, parallel seat allocation, host-only start, engine turn ownership, stale writes, rule rejection, replay-safe retries, simultaneous commands, unavailable engines, payload validation, input/snapshot immutability, view projection, conditional Blob operations across separate adapter instances, and actual HTTP requests. Real Jailbreak-engine tests exercise two players through turn ownership, movement, a Combat roll, resolution, turn handoff and reconnect, a server-rolled lockpick check, and class rewards that only each adventurer's owner can draw or choose. They confirm that injected client dice outcomes cannot replace server randomness. Blob tests use a contract fake; they are not evidence of a successful production storage connection.
