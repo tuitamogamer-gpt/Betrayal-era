@@ -40,11 +40,11 @@ const service = new RoomService({
 
 | Actions | Authorized player |
 | --- | --- |
-| `begin-turn`, `escape`, `move`, `engage`, `resolve`, `end-turn`, `dismiss-active`, `racial`, `use-item`, `lockpick-roll`, `lockpick-adjust`, `lockpick-resolve`, `lockpick-stop`, `lockpick-decline`, `cache-item` | Owner of the active adventurer |
+| `deploy`, `begin-turn`, `escape`, `move`, `engage`, `resolve`, `end-turn`, `dismiss-active`, `racial`, `use-item`, `lockpick-roll`, `lockpick-adjust`, `lockpick-resolve`, `lockpick-stop`, `lockpick-decline`, `cache-item` | Owner of the active (or deploying) adventurer |
 | `defend` | Owner of the adventurer currently being attacked |
 | `choose-class`, `draw-classes`, `decline-earned-classes` | Owner of the adventurer named by `heroId` |
 
-The server generates every combat, enemy, lockpick and class-draw random result. The only start option is `{expansions: ['valenwood']}`, which adds the Valenwood classes to the rewards; any other option fails with `UNSUPPORTED_OPTIONS`. Rooms created before schema 2 are upgraded by the engine on their next action.
+The server generates every random result: the standard setup's enemy draw, combat and enemy dice, lockpick dice and class draws. The host may choose start options `setup` (`tutorial` or `standard`), `party` (adventurer IDs in turn order), `difficulty` and `expansions` (`['valenwood']`); the engine validates them, and any other option fails with `UNSUPPORTED_OPTIONS`. Seat 1 controls the first adventurer in turn order, so two players need a two-adventurer party. Rooms created with older schemas are upgraded by the engine on their next action.
 
 ## Service methods
 

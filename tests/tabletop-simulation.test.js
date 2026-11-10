@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  createJailbreak, reduceJailbreak, getLegalMoves, isJailbreakState, classOptions, canDrawClasses,
+  createJailbreak, reduceJailbreak, getLegalMoves, getDeploymentHexes, isJailbreakState, classOptions, canDrawClasses,
   JAILBREAK_MAP, SKILLS,
 } from '../src/tabletop/engine.js';
+import { JAILBREAK_ENEMY_BAG } from '../src/tabletop/jailbreak-enemies.js';
 import { rangeDistance, isInFormRange } from '../src/tabletop/battle-rules.js';
 
 const LIGHT_FATIGUE = 20;
@@ -16,6 +17,7 @@ function checkInvariants(state) {
   const tracks = state.heroes.flatMap(hero => hero.cooldown);
   assert.equal(state.supply.light + tracks.filter(die => die.kind === 'light-fatigue').length, LIGHT_FATIGUE);
   assert.equal(state.supply.over + tracks.filter(die => die.kind === 'overfatigue').length, OVERFATIGUE);
+  assert.equal(state.supply.status + tracks.filter(die => die.kind === 'status').length, 12);
   for (const hero of state.heroes) {
     assert.ok(hero.hp >= 0 && hero.hp <= hero.maxHp && hero.bonusHp >= 0);
     if (!hero.hp) assert.equal(hero.dice.filter(die => die.state === 'active').length, 0);
@@ -28,6 +30,10 @@ function checkInvariants(state) {
 /** A simple seeded party policy that exercises every phase, including the cache. */
 function chooseAction(state, seed) {
   const hero = state.heroes[state.activeHero];
+  if (state.phase === 'deploy') {
+    const hexes = getDeploymentHexes(state);
+    return { type: 'deploy', hex: hexes[seed % hexes.length], form: hero.form };
+  }
   if (state.phase === 'start') return { type: 'begin-turn' };
   if (state.phase === 'lockpick') {
     const check = state.pending.check;
@@ -100,38 +106,49 @@ function chooseAction(state, seed) {
   return { type: 'end-turn' };
 }
 
-test('300 seeded encounters reach class rewards and completion while preserving physical invariants', () => {
+const PARTIES = [['argonian', 'dark-elf'], ['dark-elf', 'argonian'], ['argonian'], ['dark-elf']];
+const DIFFICULTIES = ['Adept', 'Expert', 'Apprentice'];
+
+test('600 seeded encounters in both setups reach class rewards and completion while preserving physical invariants', () => {
   const outcomes = { victory: 0, defeat: 0 };
-  let cachesOpened = 0, checksFailed = 0, itemsUsed = 0, draws = 0, declines = 0;
-  for (let seed = 1; seed <= 300; seed++) {
+  let cachesOpened = 0, checksFailed = 0, itemsUsed = 0, draws = 0, declines = 0, banes = 0, rots = 0;
+  const enemiesSeen = new Set();
+  for (let seed = 1; seed <= 600; seed++) {
     let n = seed;
     const random = () => { n = (Math.imul(n, 1664525) + 1013904223) >>> 0; return n / 4294967296; };
-    let state = createJailbreak();
+    const tutorial = seed % 3 === 0;
+    let state = createJailbreak(tutorial ? { difficulty: DIFFICULTIES[seed % 2] } : {
+      setup: 'standard', party: PARTIES[seed % PARTIES.length], difficulty: DIFFICULTIES[seed % 3], random,
+    });
+    state.enemies.forEach(enemy => enemiesSeen.add(enemy.id));
     checkInvariants(state);
     for (let steps = 0; state.phase !== 'complete'; steps++) {
-      assert.ok(steps < 400, `seed ${seed} did not finish`);
+      assert.ok(steps < 500, `seed ${seed} did not finish`);
       const action = chooseAction(state, seed + steps);
       if (action.type === 'use-item') itemsUsed++;
       if (action.type === 'draw-classes') draws++;
       if (action.type === 'decline-earned-classes') declines++;
       state = reduceJailbreak(state, action, { random });
       checkInvariants(state);
+      banes += state.log.at(-1)?.includes('gains a Bane status') ? 1 : 0;
     }
     outcomes[state.outcome]++;
+    rots += state.log.filter(line => line.startsWith('Rot:')).length;
     if (state.cache.result === 'taken' || state.cache.result === 'discarded') cachesOpened++;
     if (state.cache.result === 'cycled') checksFailed++;
     assert.equal(state.partyXp, 2);
-    assert.deepEqual(state.supply, { light: LIGHT_FATIGUE, over: OVERFATIGUE });
+    assert.deepEqual(state.supply, { light: LIGHT_FATIGUE, over: OVERFATIGUE, status: 12 });
     for (const hero of state.heroes) {
       assert.equal(hero.hp, hero.maxHp);
       assert.equal(hero.cooldown.length, 0);
       assert.ok(typeof hero.className === 'string');
       assert.ok(hero.dice.every(die => die.state === 'available'));
     }
-    assert.notEqual(state.heroes[0].className, state.heroes[1].className);
+    if (state.heroes.length === 2) assert.notEqual(state.heroes[0].className, state.heroes[1].className);
   }
-  assert.equal(outcomes.victory + outcomes.defeat, 300);
+  assert.equal(outcomes.victory + outcomes.defeat, 600);
+  assert.deepEqual([...enemiesSeen].sort(), [...JAILBREAK_ENEMY_BAG].sort());
   // The policy must actually exercise the new flows, not just terminate.
-  assert.ok(cachesOpened > 0 && checksFailed > 0 && itemsUsed > 0 && draws > 0 && declines > 0,
-    JSON.stringify({ cachesOpened, checksFailed, itemsUsed, draws, declines, outcomes }));
+  assert.ok(cachesOpened > 0 && checksFailed > 0 && itemsUsed > 0 && draws > 0 && declines > 0 && banes > 0 && rots > 0,
+    JSON.stringify({ cachesOpened, checksFailed, itemsUsed, draws, declines, banes, rots, outcomes }));
 });

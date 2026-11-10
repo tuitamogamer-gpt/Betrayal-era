@@ -51,3 +51,15 @@
 .lock-die strong{font-size:20px}
 .class-choice{font-size:19px}
 }
+
+.cooldown-slot.status{background:#5d3f6e;border-color:#a983c0;color:#f1e3fb;font-weight:700}
+.status-note{margin-top:7px;font-size:9px;line-height:1.55;color:#d9c2ea;border-left:2px solid #a983c0;padding-left:7px}
+.setup-form{border:1px solid var(--line);border-radius:6px;padding:4px 14px 12px;margin:0 0 6px;background:#172017}
+.setup-form legend{padding:0 6px;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--gold)}
+.setup-form .option-choice{align-items:flex-start;line-height:1.5;margin:8px 0!important}
+.setup-form .option-choice input{margin-top:2px}
+.setup-form .field:disabled{opacity:.5}
+.setup-form .small-note{margin:8px 0 0}
+.enemy-profile{display:flex;flex-direction:column;justify-content:flex-start}
+@media(max-width:740px){.party-column .hero-card:only-of-type{grid-column:1/-1}
+}

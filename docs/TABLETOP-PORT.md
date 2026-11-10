@@ -6,14 +6,21 @@ The requested destination is an application that enforces the rules, supports so
 
 ## Current playable scope
 
-`/tabletop.html` plays the complete **Jailbreak Introduction encounter** with the official extended tutorial's fixed two-adventurer setup: Argonian and Dark Elf against the High Elf and Argonian Bandits. One person controls both adventurers locally; the multiplayer adapter assigns them to two players. It is not the published one-adventurer solo setup or a randomized Jailbreak draw.
+`/tabletop.html` plays the complete **Jailbreak Introduction encounter** with the two verified tutorial adventurers: the Argonian (One Hand and Shield) and the Dark Elf (Destruction Staff).
+
+- **Tutorial setup:** the extended tutorial's fixed draw and positions, against the High Elf and Argonian Bandits.
+- **Standard setup:** one or two adventurers in a chosen turn order. One level-1 enemy per adventurer is drawn from the five-enemy bag, then the adventurers deploy on the entrance tile.
+- **Difficulty:** Apprentice, Adept or Expert.
+
+One person can control every adventurer locally; online, two players control one adventurer each.
 
 - **Battle:** the actual 33-hex layout, separate Stamina/Magicka limits, battle forms, actual die faces, active dice, the 13-slot cooldown track, enemy priorities and movement, fatigue rounds and end-of-round victory checks.
+- **Enemies:** all five Jailbreak enemies: High Elf Bandit (Dodge), Argonian Bandit (Enfeeble 1), Skeever Pup (engages everyone in range; Rot), Skeleton and Spriggan (no Combat dice; Bane status with start-of-turn true damage).
 - **Common cache:** ending a move on the cache hex offers the lockpick check (code 5-2-2, three attempts). Server-generated lockpick dice, kept dice, ±1 adjustments paid with real fatigue from the finite supply, voluntary stopping, failure (cache discarded, card cycled) and success. Unused movement of the interrupted move can continue afterwards.
 - **Falkreath Meat Loaf (CO-019):** placed in a ready slot or the pack, or left. From a ready slot during its owner's turn it gives 3 bonus HP to its user or 1 bonus HP to each adventurer on the map. Bonus HP absorbs enemy damage first, never true damage, and is ignored by enemy priority.
 - **Achievements, cleanup and class rewards:** the eleven-entry achievements checklist, end-of-battle cleanup, the published achievement-to-class table, the draw procedure for adventurers with fewer than two earned classes, the non-achievement choice and its cost, and the all-defeated draw. Afterwards party XP becomes 2 and the adventurers rest to full HP with empty cooldown tracks. Day 1 has not begun.
 
-Class abilities are recorded by class name only. The random five-enemy draw (Skeever Pup's Rot and Spriggan's Bane are not implemented), provincial travel, quests and the full campaign are not connected. Do not describe this screen as the full board game or as ready for a complete campaign.
+Other races and skill lines, three- and four-adventurer parties and class abilities (recorded by name only) are not implemented. Provincial travel, quests and the full campaign are not connected. Do not describe this screen as the full board game or as ready for a complete campaign.
 
 ## Verification and sources
 
@@ -23,7 +30,7 @@ Class abilities are recorded by class name only. The random five-enemy draw (Ske
 - [Lockpicking contract](lockpicking.md): immutable checks, the published cache example and how the encounter applies it.
 - [Network contract](tabletop-network.md): authenticated rooms, authoritative actions, persistence and deployment requirements.
 
-Run `npm run test:tabletop` for the rules and room tests. Integration tests replay the extended tutorial from setup through its lockpick example, final attack, cleanup and class options (T pp.11–22), then complete the rewards. Other tests cover rejected moves, cooldown ordering, interrupted movement, fatigue payment, inventory limits, bonus HP, enemy destination ties, every reward path, save upgrades, concurrency and turn ownership. A further 300 seeded encounters play to completion, checking conservation of physical dice and fatigue, legal health and cooldown capacity, structural validity and plain-JSON persistence; these are consistency checks, not proof of the entire published ruleset.
+Run `npm run test:tabletop` for the rules and room tests. Integration tests replay the extended tutorial from setup through its lockpick example, final attack, cleanup and class options (T pp.11–22), then complete the rewards. Other tests cover rejected moves, cooldown ordering, interrupted movement, fatigue payment, inventory limits, bonus HP, enemy destination ties, every reward path, the standard draw and deployment, Rot, Bane, save upgrades, concurrency and turn ownership. A further 600 seeded encounters in both setups, solo and in pairs, play to completion, checking conservation of physical dice, fatigue and status dice, legal health and cooldown capacity, structural validity and plain-JSON persistence; these are consistency checks, not proof of the entire published ruleset.
 
 ## Remaining campaign work
 
@@ -36,7 +43,7 @@ Online play also requires private durable storage connected to the existing Verc
 ## Completion criteria
 
 1. Cover every base-game component and current erratum with traceable data.
-2. Complete the Jailbreak encounter, including cache, achievements, class rewards and cleanup. **Done for the fixed tutorial setup**; the random draw of all five enemies, their remaining skills and the true-solo setup remain.
+2. Complete the Jailbreak encounter, including cache, achievements, class rewards and cleanup. **Done for one or two of the verified adventurers**, in the tutorial and standard setups; other adventurer builds and three or four adventurers remain.
 3. Implement each province's overland, town, conflict, delve and dungeon flows.
 4. Verify all three campaign sessions, progression, failures and endgames.
 5. Verify actual one-to-four-adventurer setups, solo ownership, online reconnects, and concurrent actions against deployed durable storage.

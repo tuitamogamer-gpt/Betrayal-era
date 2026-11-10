@@ -1,15 +1,19 @@
 /**
- * Jailbreak Introduction encounter with the official Extended Tutorial's fixed
- * two-adventurer setup: Argonian and Dark Elf against the High Elf and
- * Argonian Bandits. Combat: Rulebook pp.54–64, Tutorial pp.8–18. Cache, item,
+ * Jailbreak Introduction encounter for the two verified tutorial adventurers:
+ * the Argonian (One Hand and Shield) and the Dark Elf (Destruction Staff).
+ * Setups: the Extended Tutorial's fixed two-adventurer setup (High Elf and
+ * Argonian Bandits, fixed positions), or the standard setup with one enemy per
+ * adventurer drawn from the five-enemy bag and a deployment step, for one or
+ * two adventurers. Combat: Rulebook pp.54–67, Tutorial pp.8–18. Cache, item,
  * achievements, cleanup and class rewards: Rulebook pp.20, 28–29, 68–70, 86,
  * 89, 92–94 and Tutorial pp.19–22. docs/jailbreak-component-data.md records the
  * page references and rulebook versions checked.
  *
- * Not the complete game: the random five-enemy draw, class abilities, the
- * one-adventurer solo setup and the campaign are outside this reducer. Party
- * decisions are automated by an explicit convention, not an extra tabletop
- * rule: ties use party order, then the northernmost, then the westernmost hex.
+ * Not the complete game: other races and skill lines, class abilities and the
+ * campaign are outside this reducer. Party decisions are automated by an
+ * explicit convention, not an extra tabletop rule: ties use party order, then
+ * the northernmost, then the westernmost hex; equal-level enemies act in
+ * deployment order.
  */
 import {
   BATTLE_FORMS, createTurnState, recordMove, recordEngage, movementPath,
@@ -24,6 +28,7 @@ import {
 import {
   SUPPORTED_EXPANSIONS, classPool, completedAchievements, earnedClasses, isClassAvailable,
 } from './jailbreak-rewards.js';
+import { JAILBREAK_ENEMIES, JAILBREAK_ENEMY_BAG, ENEMY_DEPLOYMENT_HEXES, createEnemy } from './jailbreak-enemies.js';
 
 export class JailbreakError extends Error {
   constructor(code, message) { super(message); this.name = 'JailbreakError'; this.code = code; }
@@ -32,15 +37,20 @@ const requireRule = (condition, code, message) => { if (!condition) throw new Ja
 const clone = value => structuredClone(value);
 const natural = value => Number.isSafeInteger(value) && value >= 0;
 const TENACITY_MAX = 5;
-/** Finite fatigue supply used by this engine: 20 light and 12 overfatigue dice. */
+/** R p4 component counts: 20 light fatigue, 12 overfatigue and 12 status effect dice. */
 const LIGHT_FATIGUE_DICE = 20;
 const OVERFATIGUE_DICE = 12;
+const STATUS_DICE = 12;
+/** Status effects this encounter can apply (Enemy Skills Reference: Bane). */
+const STATUS_FACES = new Set(['bane']);
 
-export const JAILBREAK_SCHEMA_VERSION = 2;
+export const JAILBREAK_SCHEMA_VERSION = 3;
+export const SETUPS = Object.freeze(['tutorial', 'standard']);
+export const DIFFICULTIES = Object.freeze(['Apprentice', 'Adept', 'Expert']);
 /** R p28: an inventory holds eight cards, four of them in ready slots. */
 export const INVENTORY_LIMIT = 8;
 export const READY_SLOTS = 4;
-export const PHASES = Object.freeze(['start', 'heroes', 'roll', 'lockpick', 'enemy-defense', 'rewards', 'complete']);
+export const PHASES = Object.freeze(['deploy', 'start', 'heroes', 'roll', 'lockpick', 'enemy-defense', 'rewards', 'complete']);
 const ACTING_PHASES = new Set(['start', 'heroes', 'roll', 'lockpick']);
 const DIE_STATES = new Set(['available', 'active', 'cooldown', 'drained', 'rolled']);
 const COOLDOWN_KINDS = new Set(['skill', 'light-fatigue', 'overfatigue', 'status']);
@@ -93,6 +103,26 @@ function makeDice(heroId, skill, count) {
   return Array.from({ length: count }, (_, index) => ({ id: `${heroId}-${skill}-${index + 1}`, skill, state: 'available', face: null }));
 }
 
+/**
+ * The verified adventurers (Tutorial pp.8–10, Base Race and Skill Sheets):
+ * race statistics, Combat dice, two level-1 dice of the chosen skill line,
+ * and the tutorial's deployment hex and battle form.
+ */
+export const ADVENTURERS = Object.freeze({
+  argonian: Object.freeze({ name: 'Argonian', race: 'Argonian', hp: 5, stamina: 3, magicka: 2, combatDice: 1, skill: 'shield-discipline', skillLine: 'One Hand and Shield', form: 'light-weapon', tutorialHex: '7,3' }),
+  'dark-elf': Object.freeze({ name: 'Dark Elf', race: 'Dark Elf', hp: 4, stamina: 2, magicka: 3, combatDice: 2, skill: 'force-shock', skillLine: 'Destruction Staff', form: 'magic', tutorialHex: '8,2' }),
+});
+
+function createHero(id, ownerSeat, position) {
+  const profile = ADVENTURERS[id];
+  return {
+    id, name: profile.name, race: profile.race, ownerSeat, hp: profile.hp, stamina: profile.stamina, magicka: profile.magicka,
+    maxHp: profile.hp, bonusHp: 0, cooldownStat: 2, tenacity: 0, form: profile.form, position, escaped: false, racialUsed: false,
+    dice: [...makeDice(id, 'combat', profile.combatDice), ...makeDice(id, profile.skill, 2)], cooldown: [],
+    items: [], savedXp: 0, className: null,
+  };
+}
+
 /** Tutorial T19 / R p69: the top common card shows code 5-2-2 with three attempts. */
 function createCache() {
   return {
@@ -109,35 +139,46 @@ function checkExpansions(expansions) {
   return [...expansions].sort();
 }
 
-export function createJailbreak({ players = [{ seat: 0 }], expansions = [] } = {}) {
-  requireRule(Array.isArray(players) && players.length >= 1 && players.length <= 2,
-    'FIXTURE_PLAYERS', 'This tutorial fixture supports one or two people controlling two adventurers.');
+/**
+ * `setup: 'tutorial'` is the Extended Tutorial's fixed setup (T pp.7–10).
+ * `setup: 'standard'` follows R pp.92–93: draw one level-1 enemy per
+ * adventurer from the five-enemy bag into the numbered hexes, then deploy the
+ * adventurers in turn order. `party` lists the adventurers in turn order; the
+ * first takes the first player token. Seat i controls party[i] when present,
+ * otherwise seat 0 controls it. `random` is used only for the standard draw.
+ */
+export function createJailbreak({ players = [{ seat: 0 }], expansions = [], difficulty = 'Adept', setup = 'tutorial', party, random = Math.random } = {}) {
+  requireRule(SETUPS.includes(setup), 'INVALID_SETUP', 'Choose the tutorial setup or the standard setup.');
+  requireRule(DIFFICULTIES.includes(difficulty), 'INVALID_DIFFICULTY', 'Choose Apprentice, Adept or Expert difficulty.');
+  const heroIds = party === undefined ? ['argonian', 'dark-elf'] : party;
+  requireRule(Array.isArray(heroIds) && heroIds.length >= 1 && heroIds.length <= 2 && heroIds.every(id => Object.hasOwn(ADVENTURERS, id)) &&
+    new Set(heroIds).size === heroIds.length, 'INVALID_PARTY', 'Choose one or two different adventurers.');
+  requireRule(setup === 'standard' || heroIds.join() === 'argonian,dark-elf', 'INVALID_PARTY',
+    'The tutorial setup uses both adventurers, with the Argonian taking the first turn.');
+  requireRule(Array.isArray(players) && players.length >= 1 && players.length <= heroIds.length,
+    'FIXTURE_PLAYERS', `This party supports one${heroIds.length === 2 ? ' or two people' : ' person'}, each controlling an adventurer.`);
   const seats = players.map((player, index) => player?.seat ?? index);
   requireRule(seats.every(seat => Number.isSafeInteger(seat) && seat >= 0 && seat < 4) && new Set(seats).size === seats.length,
     'INVALID_PLAYERS', 'Player seats must be distinct.');
   const chosenExpansions = checkExpansions(expansions);
-  const hero = (id, name, race, stats, form, position, ownerSeat, skill) => ({
-    id, name, race, ownerSeat, ...stats, maxHp: stats.hp, bonusHp: 0, cooldownStat: 2,
-    tenacity: 0, form, position, escaped: false, racialUsed: false,
-    dice: [...makeDice(id, 'combat', id === 'argonian' ? 1 : 2), ...makeDice(id, skill, 2)], cooldown: [],
-    items: [], savedXp: 0, className: null,
-  });
+  const tutorial = setup === 'tutorial';
+  const heroes = heroIds.map((id, index) => createHero(id, seats[index] ?? seats[0], tutorial ? ADVENTURERS[id].tutorialHex : null));
+  let enemies;
+  if (tutorial) enemies = [createEnemy('high-elf-bandit', ENEMY_DEPLOYMENT_HEXES[0]), createEnemy('argonian-bandit', ENEMY_DEPLOYMENT_HEXES[1])];
+  else {
+    requireRule(typeof random === 'function', 'INVALID_RANDOM', 'A random source is required for the enemy draw.');
+    const bag = [...JAILBREAK_ENEMY_BAG];
+    enemies = heroIds.map((_, index) => createEnemy(bag.splice(Math.floor(randomUnit(random) * bag.length), 1)[0], ENEMY_DEPLOYMENT_HEXES[index]));
+  }
   return {
-    schemaVersion: JAILBREAK_SCHEMA_VERSION, mode: 'jailbreak-combat', difficulty: 'Adept', expansions: chosenExpansions,
-    partyXp: 1, day: null, round: 1, phase: 'start', activeHero: 0, turn: createTurnState(), pending: null, outcome: null,
-    heroes: [
-      hero('argonian', 'Argonian', 'Argonian', { hp: 5, stamina: 3, magicka: 2 }, 'light-weapon', '7,3', seats[0], 'shield-discipline'),
-      hero('dark-elf', 'Dark Elf', 'Dark Elf', { hp: 4, stamina: 2, magicka: 3 }, 'magic', '8,2', seats[1] ?? seats[0], 'force-shock'),
-    ],
-    enemies: [
-      { id: 'high-elf-bandit', name: 'High Elf Bandit', level: 1, hp: 3, maxHp: 3, defense: 0, range: 4, combat: 1, targets: 2, priority: 'weakest', skill: 'Dodge', position: '3,1' },
-      { id: 'argonian-bandit', name: 'Argonian Bandit', level: 1, hp: 3, maxHp: 3, defense: 1, range: 3, combat: 1, targets: 2, priority: 'strongest', skill: 'Enfeeble 1', position: '3,7' },
-    ],
+    schemaVersion: JAILBREAK_SCHEMA_VERSION, mode: 'jailbreak-combat', setup, difficulty, expansions: chosenExpansions,
+    partyXp: 1, day: null, round: 1, phase: tutorial ? 'start' : 'deploy', activeHero: 0, turn: createTurnState(), pending: null, outcome: null,
+    heroes, enemies,
     cache: createCache(),
-    supply: { light: LIGHT_FATIGUE_DICE, over: OVERFATIGUE_DICE }, nextDieId: 1, enemyQueue: [],
+    supply: { light: LIGHT_FATIGUE_DICE, over: OVERFATIGUE_DICE, status: STATUS_DICE }, nextDieId: 1, enemyQueue: [],
     achievements: { firstTurn: null, lastTurn: null, firstEscape: null, defeated: {}, rangedDamage: null, meleeDamage: null, lockpick: null },
     rewards: null,
-    log: ['Jailbreak: two adventurers, Adept difficulty. Day 1 has not begun.'],
+    log: [`Jailbreak: ${plural(heroes.length, 'adventurer')}, ${difficulty} difficulty, ${tutorial ? 'tutorial setup' : `drawn enemies: ${enemies.map(enemy => enemy.name).join(' and ')}`}. Day 1 has not begun.`],
   };
 }
 
@@ -145,7 +186,13 @@ const currentHero = state => state.heroes[state.activeHero];
 const present = hero => Boolean(hero) && hero.hp > 0 && !hero.escaped && hero.position !== null;
 const log = (state, text) => { state.log.push(text); if (state.log.length > 90) state.log.shift(); };
 const occupied = (state, except) => [...state.heroes, ...state.enemies].filter(unit => unit.hp > 0 && unit.position && unit.id !== except).map(unit => unit.position);
-const returnSupply = (state, dice) => { for (const die of dice) { if (die.kind === 'light-fatigue') state.supply.light++; if (die.kind === 'overfatigue') state.supply.over++; } };
+const returnSupply = (state, dice) => {
+  for (const die of dice) {
+    if (die.kind === 'light-fatigue') state.supply.light++;
+    if (die.kind === 'overfatigue') state.supply.over++;
+    if (die.kind === 'status') state.supply.status++;
+  }
+};
 const itemName = code => ITEMS[code]?.name ?? code;
 const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
 
@@ -191,6 +238,24 @@ function fatigue(state, hero, count, over = false) {
     const die = allocateFatigue(state, over);
     if (die) enqueue(state, hero, die);
   }
+}
+
+/**
+ * R p67 and R p23: an adventurer's status die enters the leftmost open
+ * cooldown position; gaining a status already present moves that die there
+ * instead. R p21: with no status dice left in the supply, nothing is applied.
+ */
+function applyStatus(state, hero, face) {
+  if (!present(hero)) return false;
+  const existing = hero.cooldown.findIndex(die => die.kind === 'status' && die.face === face);
+  if (existing !== -1) {
+    hero.cooldown.push(...hero.cooldown.splice(existing, 1));
+    return true;
+  }
+  if (!state.supply.status) return false;
+  state.supply.status--;
+  enqueue(state, hero, { id: `status-${state.nextDieId++}`, kind: 'status', face });
+  return true;
 }
 
 function defeatHero(state, hero) {
@@ -274,9 +339,10 @@ const northernmost = (a, b) => a.cell.y - b.cell.y || a.cell.x - b.cell.x;
  * R p64 and the official "Enemy movement" FAQ: move toward the closest
  * unoccupied hex, reached through unoccupied hexes, from which a targetable
  * unit would be in range and sight. Among equally close destinations the
- * priority icon decides (the strongest or weakest such unit); remaining ties are
- * a party decision. The number of possible targets is ignored. Without any
- * destination, approach the closest opposing unit as far as possible.
+ * priority icon picks the strongest or weakest such unit, and the enemy moves
+ * toward it: the destinations nearest that unit remain (R p65 example).
+ * Remaining ties are a party decision. The number of possible targets is
+ * ignored. Without any destination, approach the closest opposing unit.
  */
 function moveEnemy(state, enemy) {
   const heroes = priorityHeroes(state, enemy);
@@ -287,10 +353,10 @@ function moveEnemy(state, enemy) {
   if (destinations.length) {
     const shortest = Math.min(...destinations.map(candidate => candidate.path.length));
     let best = destinations.filter(candidate => candidate.path.length === shortest);
-    for (const hero of heroes) {
-      const reaching = best.filter(candidate => enemyCanTarget(enemy, hero, candidate.cell.id));
-      if (reaching.length) { best = reaching; break; }
-    }
+    const priority = heroes.find(hero => best.some(candidate => enemyCanTarget(enemy, hero, candidate.cell.id)));
+    const distance = candidate => rangeDistance(JAILBREAK_MAP, candidate.cell.id, priority.position);
+    const nearest = Math.min(...best.map(distance));
+    best = best.filter(candidate => distance(candidate) === nearest);
     const { path } = best.sort(northernmost)[0];
     enemy.position = path[Math.min(2, path.length - 1)];
     return;
@@ -348,10 +414,39 @@ function finishRound(state, random) {
       defeatHero(state, hero);
     }
   }
-  state.activeHero = state.heroes.findIndex(present);
-  state.turn = createTurnState(); state.pending = null;
-  if (state.activeHero >= 0) state.phase = 'start';
-  else { state.enemyQueue = state.enemies.filter(enemy => enemy.hp > 0).map(enemy => enemy.id); advanceEnemies(state, random); }
+  startNextHeroTurn(state, 0, random);
+}
+
+/**
+ * Begin the next undefeated adventurer's turn from `fromIndex`, resolving its
+ * start-of-turn effects first (Bane: 1 true damage). An adventurer defeated by
+ * them takes no turn. After the last adventurer, the enemies act.
+ */
+function startNextHeroTurn(state, fromIndex, random) {
+  for (let index = fromIndex; index < state.heroes.length; index++) {
+    const hero = state.heroes[index];
+    if (!present(hero)) continue;
+    state.activeHero = index; state.turn = createTurnState(); state.pending = null; state.phase = 'start';
+    if (hero.cooldown.some(die => die.kind === 'status' && die.face === 'bane')) {
+      hero.hp = applyTrueDamage(hero, 1).unit.hp;
+      log(state, `${hero.name} takes 1 true damage from Bane at the start of the turn.`);
+      defeatHero(state, hero);
+      if (!present(hero)) continue;
+    }
+    return;
+  }
+  state.pending = null;
+  state.enemyQueue = state.enemies.filter(enemy => enemy.hp > 0).map(enemy => enemy.id);
+  advanceEnemies(state, random);
+}
+
+/** After-engage enemy skills affect every target (R p64; Enemy Skills Reference). */
+function afterEnemyEngage(state, enemy, targetIds) {
+  for (const id of targetIds) {
+    const target = state.heroes.find(hero => hero.id === id);
+    if (enemy.skill === 'Enfeeble 1') fatigue(state, target, 1);
+    if (enemy.skill === 'Bane' && applyStatus(state, target, 'bane')) log(state, `${target.name} gains a Bane status.`);
+  }
 }
 
 function advanceEnemies(state, random) {
@@ -360,13 +455,20 @@ function advanceEnemies(state, random) {
     const enemy = state.enemies.find(enemy => enemy.id === enemyId);
     if (!enemy || enemy.hp === 0) continue;
     moveEnemy(state, enemy);
-    const targets = priorityHeroes(state, enemy).filter(hero => enemyCanTarget(enemy, hero)).slice(0, enemy.targets);
+    const targets = priorityHeroes(state, enemy).filter(hero => enemyCanTarget(enemy, hero)).slice(0, enemy.targets === 'all' ? undefined : enemy.targets);
     if (!targets.length) continue;
     let damage = 0;
     for (let die = 0; die < enemy.combat; die++) damage += rollFace(random, enemyFaces);
+    log(state, enemy.combat ? `${enemy.name} rolls ${damage} damage against ${plural(targets.length, 'adventurer')}.`
+      : `${enemy.name} engages ${plural(targets.length, 'adventurer')} without Combat dice.`);
+    if (!damage) {
+      // Nothing can be prevented: the engage resolves at once, after-engage
+      // skills included (R p64 completes engages that roll no damage).
+      afterEnemyEngage(state, enemy, targets.map(hero => hero.id));
+      continue;
+    }
     state.pending = { heroId: targets[0].id, enemyId: enemy.id, damage, targets: targets.map(hero => hero.id), targetIndex: 0 };
     state.phase = 'enemy-defense';
-    log(state, `${enemy.name} rolls ${damage} damage against ${plural(targets.length, 'adventurer')}.`);
     return;
   }
   finishRound(state, random);
@@ -374,12 +476,7 @@ function advanceEnemies(state, random) {
 
 function endHeroTurn(state, random) {
   state.achievements.lastTurn = currentHero(state)?.id ?? state.achievements.lastTurn;
-  for (let index = state.activeHero + 1; index < state.heroes.length; index++) {
-    if (present(state.heroes[index])) { state.activeHero = index; state.turn = createTurnState(); state.phase = 'start'; state.pending = null; return; }
-  }
-  state.pending = null;
-  state.enemyQueue = state.enemies.filter(enemy => enemy.hp > 0).map(enemy => enemy.id);
-  advanceEnemies(state, random);
+  startNextHeroTurn(state, state.activeHero + 1, random);
 }
 
 function resolveRoll(state, action, random) {
@@ -422,7 +519,10 @@ function resolveRoll(state, action, random) {
       const outcome = applyPhysicalDamage(target, value - dodged, { defenseRemaining: defense });
       defense = outcome.defenseRemaining; target.hp = outcome.unit.hp;
       log(state, `${hero.name} deals ${outcome.hpLost} damage to ${target.name}.`);
-      if (!target.hp) { target.position = null; state.achievements.defeated[target.id] = hero.id; log(state, `${target.name} is defeated.`); }
+      if (!target.hp) {
+        target.position = null; state.achievements.defeated[target.id] = hero.id; log(state, `${target.name} is defeated.`);
+        if (target.skill === 'Rot') { fatigue(state, hero, 1, true); log(state, `Rot: ${hero.name} gains 1 overfatigue.`); }
+      }
     }
     if (result.face.backlash) {
       const backlash = backlashTargets.get(result.dieId);
@@ -464,10 +564,10 @@ function defend(state, action, random) {
     state.achievements[key] ??= hero.id;
   }
   defeatHero(state, hero);
-  // Enfeeble triggers after the whole engage, after all its targets resolved.
+  // After-engage skills trigger once every target has resolved the roll.
   pending.targetIndex++;
   if (pending.targetIndex < pending.targets.length) { pending.heroId = pending.targets[pending.targetIndex]; return; }
-  if (enemy.skill === 'Enfeeble 1') for (const id of pending.targets) fatigue(state, state.heroes.find(hero => hero.id === id), 1);
+  afterEnemyEngage(state, enemy, pending.targets);
   state.pending = null; advanceEnemies(state, random);
 }
 
@@ -714,20 +814,47 @@ function chooseClass(state, action) {
 }
 
 /** Upgrade a schema-1 combat-alpha save (no cache, items or rewards). */
+/**
+ * Upgrade older saves and rooms. Schema 1 (combat alpha) lacks the cache,
+ * items and rewards; schema 2 lacks the setup kind and the status supply.
+ * Both were the fixed tutorial setup.
+ */
 export function upgradeJailbreak(input) {
-  requireRule(input && typeof input === 'object' && input.mode === 'jailbreak-combat' && [1, JAILBREAK_SCHEMA_VERSION].includes(input.schemaVersion),
+  requireRule(input && typeof input === 'object' && input.mode === 'jailbreak-combat' && [1, 2, JAILBREAK_SCHEMA_VERSION].includes(input.schemaVersion),
     'INVALID_SAVE', 'This is not a supported tabletop encounter save.');
   if (input.schemaVersion === JAILBREAK_SCHEMA_VERSION) return input;
   const state = clone(input);
-  requireRule(Array.isArray(state.heroes) && Array.isArray(state.log) && state.achievements && typeof state.achievements === 'object',
-    'INVALID_SAVE', 'This is not a supported tabletop encounter save.');
-  Object.assign(state, { schemaVersion: JAILBREAK_SCHEMA_VERSION, expansions: [], cache: createCache(), rewards: null });
-  state.achievements.lockpick = null;
-  for (const hero of state.heroes) Object.assign(hero, { bonusHp: hero.bonusHp ?? 0, items: [], savedXp: 0, className: null });
-  const finished = state.phase === 'complete';
-  delete state.cleanupPending;
-  if (finished) enterRewards(state);
+  requireRule(Array.isArray(state.heroes) && Array.isArray(state.log) && state.achievements && typeof state.achievements === 'object' &&
+    state.supply && typeof state.supply === 'object', 'INVALID_SAVE', 'This is not a supported tabletop encounter save.');
+  const finishedLegacyBattle = state.schemaVersion === 1 && state.phase === 'complete';
+  if (state.schemaVersion === 1) {
+    Object.assign(state, { expansions: [], cache: createCache(), rewards: null });
+    state.achievements.lockpick = null;
+    for (const hero of state.heroes) Object.assign(hero, { bonusHp: hero.bonusHp ?? 0, items: [], savedXp: 0, className: null });
+    delete state.cleanupPending;
+  }
+  Object.assign(state, { schemaVersion: JAILBREAK_SCHEMA_VERSION, setup: 'tutorial' });
+  state.supply.status = STATUS_DICE;
+  if (finishedLegacyBattle) enterRewards(state);
   return state;
+}
+
+/** Unoccupied entrance hexes for the adventurer deploying now (R p93 step 4). */
+export function getDeploymentHexes(state) {
+  if (state?.phase !== 'deploy') return [];
+  const taken = occupied(state, currentHero(state)?.id);
+  return Object.values(cells).filter(cell => cell.tile === 'entrance' && !taken.includes(cell.id)).map(cell => cell.id);
+}
+
+function deployHero(state, hero, action, random) {
+  ensurePhase(state, 'deploy');
+  requireRule(typeof action.hex === 'string' && getDeploymentHexes(state).includes(action.hex), 'ILLEGAL_DEPLOYMENT', 'Deploy to an unoccupied hex of the entrance tile.');
+  requireRule(BATTLE_FORMS.includes(action.form), 'INVALID_FORM', 'Choose a battle form.');
+  hero.position = action.hex; hero.form = action.form;
+  log(state, `${hero.name} deploys to ${action.hex}.`);
+  if (state.activeHero + 1 < state.heroes.length) { state.activeHero++; return; }
+  log(state, 'Round 1 begins.');
+  startNextHeroTurn(state, 0, random);
 }
 
 /** Pure authoritative action reducer. Caller supplies RNG, never client dice. */
@@ -738,6 +865,7 @@ export function reduceJailbreak(input, action, { random = Math.random } = {}) {
   requireRule(state.phase !== 'complete', 'ENCOUNTER_COMPLETE', 'The encounter is complete.');
   const hero = currentHero(state);
   switch (action.type) {
+    case 'deploy': deployHero(state, hero, action, random); break;
     case 'begin-turn':
       ensurePhase(state, 'start'); recover(state, hero); state.phase = 'heroes';
       state.achievements.firstTurn ??= hero.id; break;
@@ -812,15 +940,17 @@ function validHero(state, hero) {
     hero.maxHp > 0 && hero.hp <= hero.maxHp && hero.tenacity <= TENACITY_MAX && Number.isSafeInteger(hero.ownerSeat) &&
     typeof hero.name === 'string' && typeof hero.race === 'string' && typeof hero.escaped === 'boolean' && typeof hero.racialUsed === 'boolean' &&
     (hero.position === null || Object.hasOwn(cells, hero.position)) && BATTLE_FORMS.includes(hero.form) &&
-    // On the map exactly while undefeated and not escaped; the closing rest clears the map.
-    (hero.position === null) === (hero.hp === 0 || hero.escaped || state.phase === 'complete') &&
+    // On the map exactly while undefeated and not escaped, once deployed; the closing rest clears the map.
+    (hero.position === null) === (hero.hp === 0 || hero.escaped || state.phase === 'complete' ||
+      (state.phase === 'deploy' && state.heroes.indexOf(hero) >= state.activeHero)) &&
     (hero.className === null || isClassAvailable(hero.className, state.expansions)) &&
     Array.isArray(hero.dice) && hero.dice.every(die => die && typeof die.id === 'string' && Object.hasOwn(SKILLS, die.skill) &&
       DIE_STATES.has(die.state) && (die.face === null || isFace(die.face))) &&
     new Set(hero.dice.map(die => die.id)).size === hero.dice.length && hero.dice.filter(die => die.state === 'active').length <= 4 &&
     Array.isArray(hero.cooldown) && hero.cooldown.length <= COOLDOWN_CAPACITY &&
     hero.cooldown.every(die => die && typeof die.id === 'string' && die.id.trim() && COOLDOWN_KINDS.has(die.kind) &&
-      (die.kind !== 'status' || (typeof die.face === 'string' && Boolean(die.face.trim())))) &&
+      (die.kind !== 'status' || STATUS_FACES.has(die.face))) &&
+    new Set(hero.cooldown.filter(die => die.kind === 'status').map(die => die.face)).size === hero.cooldown.filter(die => die.kind === 'status').length &&
     new Set(hero.cooldown.map(die => die.id)).size === hero.cooldown.length &&
     hero.dice.every(die => (die.state === 'cooldown') === hero.cooldown.some(queued => queued.kind === 'skill' && queued.id === die.id)) &&
     hero.cooldown.filter(die => die.kind === 'skill').every(queued => hero.dice.some(die => die.id === queued.id)) &&
@@ -878,14 +1008,17 @@ export function isJailbreakState(state) {
     if (!Array.isArray(state.log) || !state.log.every(line => typeof line === 'string')) return false;
     const turn = state.turn;
     if (!turn || !natural(turn.moves) || !natural(turn.engages) || typeof turn.explored !== 'boolean' || !natural(turn.continueMove ?? 0)) return false;
-    if (!state.supply || !natural(state.supply.light) || !natural(state.supply.over) || !natural(state.nextDieId)) return false;
+    if (!SETUPS.includes(state.setup)) return false;
+    if (!state.supply || !natural(state.supply.light) || !natural(state.supply.over) || !natural(state.supply.status) || !natural(state.nextDieId)) return false;
     if (!Array.isArray(state.enemyQueue) || !state.enemyQueue.every(id => typeof id === 'string')) return false;
-    if (!Array.isArray(state.heroes) || state.heroes.length !== 2 || state.heroes[0]?.id !== 'argonian' || state.heroes[1]?.id !== 'dark-elf') return false;
+    if (!Array.isArray(state.heroes) || state.heroes.length < 1 || state.heroes.length > 2 ||
+      !state.heroes.every(hero => hero && Object.hasOwn(ADVENTURERS, hero.id)) || new Set(state.heroes.map(hero => hero.id)).size !== state.heroes.length) return false;
     const heroIds = state.heroes.map(hero => hero.id);
     if (!state.heroes.every(hero => validHero(state, hero))) return false;
     if (!Array.isArray(state.enemies) || !state.enemies.length || !state.enemies.every(enemy => enemy && typeof enemy.id === 'string' && typeof enemy.name === 'string' &&
-      ['hp', 'maxHp', 'level', 'defense', 'range', 'combat', 'targets'].every(key => natural(enemy[key])) && enemy.hp <= enemy.maxHp &&
-      ['strongest', 'weakest'].includes(enemy.priority) && typeof enemy.skill === 'string' &&
+      Object.hasOwn(JAILBREAK_ENEMIES, enemy.id) && ['hp', 'maxHp', 'level', 'defense', 'range', 'combat'].every(key => natural(enemy[key])) &&
+      (enemy.targets === 'all' || natural(enemy.targets)) && enemy.hp <= enemy.maxHp &&
+      ['strongest', 'weakest'].includes(enemy.priority) && (enemy.skill === null || typeof enemy.skill === 'string') &&
       (enemy.hp > 0 ? Object.hasOwn(cells, enemy.position) : enemy.position === null))) return false;
     if (new Set(state.enemies.map(enemy => enemy.id)).size !== state.enemies.length ||
       !state.enemyQueue.every(id => state.enemies.some(enemy => enemy.id === id))) return false;
@@ -894,7 +1027,8 @@ export function isJailbreakState(state) {
     // Physical fatigue dice are conserved between the supply and the cooldown tracks.
     const tracks = state.heroes.flatMap(hero => hero.cooldown);
     if (state.supply.light + tracks.filter(die => die.kind === 'light-fatigue').length !== LIGHT_FATIGUE_DICE ||
-      state.supply.over + tracks.filter(die => die.kind === 'overfatigue').length !== OVERFATIGUE_DICE) return false;
+      state.supply.over + tracks.filter(die => die.kind === 'overfatigue').length !== OVERFATIGUE_DICE ||
+      state.supply.status + tracks.filter(die => die.kind === 'status').length !== STATUS_DICE) return false;
     const cache = state.cache;
     if (!cache || cache.position !== CACHE_HEX || typeof cache.present !== 'boolean' || !Object.hasOwn(ITEMS, cache.itemCode) ||
       cache.present !== (cache.result === null) || !(cache.result === null || CACHE_RESULTS.has(cache.result)) ||
@@ -906,6 +1040,7 @@ export function isJailbreakState(state) {
       !Object.values(achievements.defeated).every(id => heroIds.includes(id))) return false;
     if (!Number.isSafeInteger(state.activeHero) || state.activeHero < -1 || state.activeHero >= state.heroes.length) return false;
     if (ACTING_PHASES.has(state.phase) && !present(currentHero(state))) return false;
+    if (state.phase === 'deploy' && (state.setup !== 'standard' || state.round !== 1 || !currentHero(state) || currentHero(state).hp === 0)) return false;
     return validPending(state, heroIds) && validRewards(state, heroIds);
   } catch {
     return false;

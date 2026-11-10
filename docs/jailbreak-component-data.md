@@ -31,6 +31,18 @@ Use doubled flat-top coordinates `(x,y)`, left to right. Neighbor deltas are `(0
 - Standard Jailbreak: draw one level-1 enemy per adventurer, without replacement, from High Elf Bandit, Argonian Bandit, Skeever Pup, Skeleton, Spriggan; deploy in numbered order (R92–93).
 - Tutorial fixed draw: High Elf Bandit at `(3,1)`, Argonian Bandit at `(3,7)` (T10).
 - Adventurers normally choose unoccupied entrance hexes in first-player order. Tutorial positions: Argonian `(7,3)`, Dark Elf `(8,2)`, Argonian acts first (T10).
+
+### Standard setup (implemented 2026-11-10)
+
+`createJailbreak({ setup: 'standard', party, difficulty, random })` follows R pp.92–93 for the two verified adventurers:
+
+- `party` lists one or two of `argonian` and `dark-elf` in turn order; the first takes the first player token. A solo game is the ordinary rules with one adventurer (R p10; R p12 only adds a token recommendation), so it draws one enemy.
+- One level-1 enemy per adventurer is drawn without replacement from the five-enemy bag and deployed in numbered hexes 1 and 2. The server's random source performs the draw online.
+- Each adventurer then deploys to an unoccupied entrance hex and sets its battle form, in turn order (R p93 step 4).
+- Difficulty is Apprentice, Adept or Expert (R p13). In this battle only Expert changes a rule: additional engages gain 2 light fatigue (R p59). Rest differences start with the End of Day phase, after Jailbreak.
+- Party conventions: equal-level enemies act in deployment order. Online, seat 1 (the host) controls the first adventurer in turn order and seat 2 the other; one player may control both.
+
+The tutorial setup stays available as `setup: 'tutorial'`, with its fixed draw, positions and turn order.
 - Party XP starts at 1; day remains unset; round starts at 1; no classes have been selected yet (R92–93).
 
 Validation against the worked example: Argonian moves three hexes to `(4,0)`, adjacent to High Elf Bandit and four hexes from Argonian Bandit. Dark Elf moves two hexes to `(6,2)`, three from High Elf Bandit and four from Argonian Bandit. Argonian Bandit later moves north to `(3,5)`, bringing both heroes within range 3. Cache `(2,4)` is adjacent to that destination. These distances match T11, T13, T16, T18.
@@ -119,7 +131,15 @@ Priority is based on current HP, excluding bonus HP. “Strongest” means highe
 - **Dodge:** prevent damage equal to the number of rolled skill dice that did not deal damage during this engage. The publisher's [Dodge FAQ](https://support.chiptheorygames.com/support/solutions/articles/33000290395-dodge-what-dice-are-considered-to-deal-damage-) clarifies that damage to **any unit** during the engage counts. Thus Force Shock's tenacity-plus-true-backlash face counts as damage-dealing even though it does not damage the bandit. A die that merely applies a damaging status or grants tenacity later used to damage does not count. Decide use of the entire roll before computing Dodge.
 - **Enfeeble 1:** after its engage, every target gains one light fatigue even if its damage was prevented.
 - **Rot:** the adventurer who defeats this unit gains one overfatigue.
-- **Bane:** after its engage, apply Bane status to its target. Spriggan has zero Combat dice but still completes an engage and applies its skill (R64). Bane's full status implementation is outside the fixed two-bandit tutorial battle and must be included before enabling random draws of all five enemies.
+- **Bane:** after its engage, apply Bane status to its target. Spriggan has zero Combat dice but still completes an engage and applies its skill (R64). The Bane status (Enemy Skills Reference, status table) deals its unit 1 true damage at the start of each of its turns.
+
+All five enemies are implemented in `src/tabletop/jailbreak-enemies.js` and the engine, from these profiles and the official Enemy Skills Reference (2-page PDF dated 2024-09-23, linked from the publisher's support page):
+
+- **Rot:** after an adventurer defeats the Skeever Pup, that adventurer gains one overfatigue.
+- **All-in-range targets:** the Skeever Pup engages every opposing unit in range and sight, resolving the roll in priority order.
+- **Status dice on adventurers (R p67, R p23):** a gained status die goes to the leftmost open cooldown position and applies until recovered or removed. Gaining a status the adventurer already has moves the existing die to the leftmost open position instead. The box holds 12 status effect dice (R p4); with none left, no status is applied (R p21). Recovery returns a status die to the supply.
+- **Bane timing:** the start of turn precedes Recovery (R p59), so Bane damage resolves as the adventurer's turn begins, before it can recover the die or choose to escape. An adventurer defeated this way takes no turn. True damage ignores bonus HP (R p63).
+- **Engages that roll no damage:** the Spriggan, or a Combat roll of 0, has nothing to prevent, so the engine resolves the engage without asking for defense and then applies after-engage skills (R p64).
 
 ## Turn and attack sequence
 
@@ -132,7 +152,7 @@ R57, R59–64 specify:
 5. Choose/change battle form, declare an eligible target if the form has one, gather available legal dice within the relevant stat limits, roll, then perform rerolls/modifications before resolving selected abilities individually in a chosen order.
 6. Resolve after-engage reactions. All damage to one unit during that action is one damage instance; defense does not reset separately for each die. True damage bypasses ordinary defense and prevention.
 7. After adventurers and any companions, enemies act from highest level to lowest. The party chooses the order of equal-level enemies. All Jailbreak enemies are level 1.
-8. An enemy moves only if no targetable opponent is already in range and sight. Its destination is the closest unoccupied hex, reached through unoccupied hexes, that puts at least one targetable opponent in range and sight. It moves up to two hexes along that route and stops upon reaching the destination, even if it could continue to target more units. Among equally close destinations its **priority icon** decides: prefer destinations from which the strongest (or weakest) such opponent would be targetable; remaining ties are a party decision, and the number of possible targets is ignored (R64 v1.1 and the official [Enemy movement FAQ](https://support.chiptheorygames.com/support/solutions/articles/33000292544-enemy-movement-how-does-it-work-in-more-detail-)). Without any destination, the enemy approaches the closest opposing unit as far as it can. The earlier engine broke destination ties toward the closest opponent instead; this was corrected on 2026-11-10 with a regression test.
+8. An enemy moves only if no targetable opponent is already in range and sight. Its destination is the closest unoccupied hex, reached through unoccupied hexes, that puts at least one targetable opponent in range and sight. It moves up to two hexes along that route and stops upon reaching the destination, even if it could continue to target more units. Among equally close destinations its **priority icon** decides: the enemy picks the strongest (or weakest) opponent that would be targetable from them and moves toward it, so the destinations nearest that unit remain; remaining ties are a party decision, and the number of possible targets is ignored (R64 v1.1, the worked example on R p65, and the official [Enemy movement FAQ](https://support.chiptheorygames.com/support/solutions/articles/33000292544-enemy-movement-how-does-it-work-in-more-detail-)). Without any destination, the enemy approaches the closest opposing unit as far as it can. The earlier engine broke destination ties toward the closest opponent instead; this was corrected on 2026-11-10 with a regression test.
 9. An enemy determines its target list in priority order, rolls its Combat dice **once**, and applies the same sum to each target. Each target can use its own prevention. Resolve relevant after-engage skills for every target.
 10. Check completion at the end of the round, after end-of-round effects.
 

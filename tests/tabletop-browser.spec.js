@@ -110,6 +110,35 @@ test('cache lockpick, item and class rewards finish the Jailbreak introduction a
   expect(errors).toEqual([]);
 });
 
+test('standard setup draws enemies, deploys the party in turn order and survives reload', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  // Draw the Spriggan (bag index 4 of 5), then the Skeever Pup (index 2 of 4).
+  await page.addInitScript(() => { const rolls = [0.9, 0.5]; Math.random = () => rolls.length ? rolls.shift() : 0.4; });
+  await page.goto('/tabletop.html');
+  await page.locator('[data-action="reset"]').click();
+  await expect(page.locator('#setup-party')).toBeDisabled();
+  await page.locator('input[name="setup"][value="standard"]').check();
+  await page.locator('#setup-party').selectOption('dark-elf,argonian');
+  await page.locator('#setup-difficulty').selectOption('Expert');
+  await page.locator('[data-action="confirm-reset"]').click();
+  await expect(page.locator('.enemy-profiles')).toContainText('Spriggan');
+  await expect(page.locator('.enemy-profiles')).toContainText('Rot');
+  await expect(page.locator('.hex-group.reachable')).toHaveCount(5);
+  await page.locator('#battle-form').selectOption('defensive');
+  await page.locator('[data-hex="8,4"]').click();
+  await expect(page.locator('.hex-group.reachable')).toHaveCount(4);
+  await page.locator('[data-hex="7,3"]').click();
+  await expect(page.locator('.turn-banner')).toContainText('Dark Elf · start of turn');
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('betrayal.tabletop.jailbreak.v1')).state);
+  expect([saved.setup, saved.difficulty]).toEqual(['standard', 'Expert']);
+  expect(saved.enemies.map(enemy => enemy.id)).toEqual(['spriggan', 'skeever-pup']);
+  expect(saved.heroes.map(hero => [hero.id, hero.position, hero.form])).toEqual([['dark-elf', '8,4', 'defensive'], ['argonian', '7,3', 'light-weapon']]);
+  await page.reload();
+  await expect(page.locator('.turn-banner')).toContainText('Dark Elf · start of turn');
+  expect(errors).toEqual([]);
+});
+
 test.describe('authoritative shared tabletop in two browsers', () => {
   let ownedServer;
 

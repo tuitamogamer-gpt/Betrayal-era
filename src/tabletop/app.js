@@ -1,9 +1,10 @@
 import './app.css';
 import {
-  createJailbreak, reduceJailbreak, getLegalMoves, upgradeJailbreak, isJailbreakState,
-  classOptions, canDrawClasses, classDrawCount, JAILBREAK_MAP, SKILLS, ITEMS, READY_SLOTS, INVENTORY_LIMIT,
+  createJailbreak, reduceJailbreak, getLegalMoves, getDeploymentHexes, upgradeJailbreak, isJailbreakState,
+  classOptions, canDrawClasses, classDrawCount, JAILBREAK_MAP, SKILLS, ITEMS, READY_SLOTS, INVENTORY_LIMIT, DIFFICULTIES,
 } from './engine.js';
 import { JAILBREAK_ACHIEVEMENTS, achievementHolder, isClassAvailable } from './jailbreak-rewards.js';
+import { JAILBREAK_ENEMIES, ENEMY_SKILL_TEXT } from './jailbreak-enemies.js';
 
 // The key predates schema 2; saved states carry their own schema version and upgrade on load.
 const SAVE_KEY = 'betrayal.tabletop.jailbreak.v1';
@@ -240,9 +241,10 @@ function renderHero(hero) {
     <div class="mat-label"><span>Cooldown →</span><span>${hero.cooldown.length} / 13</span></div><div class="cooldown-track" aria-label="Cooldown track, ${hero.cooldown.length} of 13 slots used">${Array.from({ length: 13 }, (_, index) => {
       const die = hero.cooldown[index];
       const fatigue = die?.kind === 'light-fatigue' || die?.kind === 'overfatigue';
-      const title = die ? `${index + 1}: ${fatigue ? die.kind : skillName(die.skill ?? hero.dice.find(item => item.id === die.id)?.skill ?? 'Skill die')}` : `Empty slot ${index + 1}`;
-      return `<span class="cooldown-slot ${die ? 'filled' : ''} ${fatigue ? 'fatigue' : ''} ${die?.kind === 'overfatigue' ? 'overfatigue' : ''}" title="${escapeHtml(title)}">${die ? fatigue ? '◆' : '◇' : index + 1}</span>`;
-    }).join('')}</div>${renderInventory(hero)}<p class="hero-note">${escapeHtml(FORMS.find(([id]) => id === hero.form)?.[1] ?? hero.form)} form · ${hero.dice.filter(die => die.state === 'available').length} dice available</p>
+      const status = die?.kind === 'status';
+      const title = die ? `${index + 1}: ${fatigue ? die.kind : status ? 'Bane status · 1 true damage at the start of each turn' : skillName(die.skill ?? hero.dice.find(item => item.id === die.id)?.skill ?? 'Skill die')}` : `Empty slot ${index + 1}`;
+      return `<span class="cooldown-slot ${die ? 'filled' : ''} ${fatigue ? 'fatigue' : ''} ${die?.kind === 'overfatigue' ? 'overfatigue' : ''} ${status ? 'status' : ''}" title="${escapeHtml(title)}">${die ? fatigue ? '◆' : status ? 'B' : '◇' : index + 1}</span>`;
+    }).join('')}</div>${hero.cooldown.some(die => die.kind === 'status' && die.face === 'bane') ? '<p class="status-note">Bane · 1 true damage at the start of each turn until the die is recovered</p>' : ''}${renderInventory(hero)}<p class="hero-note">${escapeHtml(FORMS.find(([id]) => id === hero.form)?.[1] ?? hero.form)} form · ${hero.dice.filter(die => die.state === 'available').length} dice available</p>
   </article>`;
 }
 
@@ -265,7 +267,7 @@ function cacheDescription() {
 
 function renderBoard() {
   let reachable = [];
-  try { reachable = state.phase === 'heroes' && canAct() ? getLegalMoves(state) : []; } catch { /* The engine may have a pending event. */ }
+  try { reachable = !canAct() ? [] : state.phase === 'heroes' ? getLegalMoves(state) : state.phase === 'deploy' ? getDeploymentHexes(state) : []; } catch { /* The engine may have a pending event. */ }
   const cells = Object.values(JAILBREAK_MAP.cells);
   const units = [...state.heroes.map(hero => ({ ...hero, kind: 'hero' })), ...state.enemies.map(enemy => ({ ...enemy, kind: 'enemy' }))]
     .filter(unit => unit.hp > 0 && unit.position && !unit.escaped);
@@ -284,7 +286,7 @@ function renderBoard() {
         if (!hex) return '';
         const { x, y } = point(hex);
         const enemy = unit.kind === 'enemy';
-        const letters = enemy ? unit.name.includes('High') ? 'HE' : 'AR' : /elf/i.test(unit.race) ? 'D' : 'A';
+        const letters = enemy ? JAILBREAK_ENEMIES[unit.id]?.abbr ?? unit.name.slice(0, 2).toUpperCase() : /elf/i.test(unit.race) ? 'D' : 'A';
         return `<g class="unit ${unit.kind} ${/elf/i.test(unit.race ?? '') ? 'dark-elf' : ''} ${unit.id === targetId ? 'selected' : ''} ${unit.id === currentHero()?.id && !enemy ? 'current' : ''}" ${enemy ? `data-target="${unit.id}" tabindex="0" role="button"` : ''} aria-label="${escapeHtml(`${unit.name}, ${unit.hp} health${unit.bonusHp ? ` plus ${unit.bonusHp} bonus` : ''}${enemy ? ', select as target' : ''}`)}"><title>${escapeHtml(`${unit.name} · ${unit.hp} HP${unit.bonusHp ? ` + ${unit.bonusHp} bonus` : ''}${enemy ? ` · Defense ${unit.defense}` : ''}`)}</title><circle class="unit-ring" cx="${x}" cy="${y - 2}" r="19"/><circle class="unit-circle" cx="${x}" cy="${y - 2}" r="16"/><text class="unit-letters" x="${x}" y="${y - 4}">${letters}</text><text class="unit-hp" x="${x}" y="${y + 8}">${unit.hp}${unit.bonusHp ? `+${unit.bonusHp}` : ''} HP</text></g>`;
       }).join('')}
     </svg><div class="board-legend"><span><i class="legend-dot"></i>Adventurers</span><span><i class="legend-dot enemy"></i>Enemies</span><span><i class="legend-dot exit"></i>Exit at start of turn</span>${state.cache.present ? '<span><i class="legend-dot cache"></i>Cache · end a move on it to pick the lock</span>' : ''}</div>
@@ -349,7 +351,7 @@ function renderFreeActions() {
 }
 
 function renderEnemies() {
-  return `<div class="enemy-profiles" aria-label="Enemy profiles">${state.enemies.map(enemy => `<button class="enemy-profile ${enemy.id === targetId ? 'selected' : ''} ${enemy.hp <= 0 ? 'defeated' : ''}" data-target="${enemy.id}" ${enemy.hp <= 0 ? 'disabled' : ''}><div class="enemy-title"><strong>${escapeHtml(enemy.name)}</strong><span>${enemy.hp <= 0 ? 'Defeated' : `${enemy.hp}/${enemy.maxHp} HP`}</span></div><div class="enemy-stats"><span>Defense <b>${enemy.defense}</b></span><span>Range <b>${enemy.range}</b></span><span>Combat <b>${enemy.combat}</b></span><span>Targets <b>${enemy.targets}</b></span></div><p class="enemy-priority">Priority: ${escapeHtml(enemy.priority)} adventurer</p><p><b>${escapeHtml(enemy.skill)}</b> · ${enemy.skill === 'Dodge' ? 'Prevents damage equal to rolled skill dice that deal no damage.' : 'After engaging, each target gains one light fatigue.'}</p></button>`).join('')}</div>`;
+  return `<div class="enemy-profiles" aria-label="Enemy profiles">${state.enemies.map(enemy => `<button class="enemy-profile ${enemy.id === targetId ? 'selected' : ''} ${enemy.hp <= 0 ? 'defeated' : ''}" data-target="${enemy.id}" ${enemy.hp <= 0 ? 'disabled' : ''}><div class="enemy-title"><strong>${escapeHtml(enemy.name)}</strong><span>${enemy.hp <= 0 ? 'Defeated' : `${enemy.hp}/${enemy.maxHp} HP`}</span></div><div class="enemy-stats"><span>Defense <b>${enemy.defense}</b></span><span>Range <b>${enemy.range}</b></span><span>Combat <b>${enemy.combat}</b></span><span>Targets <b>${enemy.targets === 'all' ? 'All' : enemy.targets}</b></span></div><p class="enemy-priority">Priority: ${escapeHtml(enemy.priority)} adventurer</p><p>${enemy.skill ? `<b>${escapeHtml(enemy.skill)}</b> · ${escapeHtml(ENEMY_SKILL_TEXT[enemy.skill] ?? '')}` : 'No skills.'}</p></button>`).join('')}</div>`;
 }
 
 function renderDefense() {
@@ -407,11 +409,12 @@ function renderActionPanel() {
   const noticeBlock = notice ? `<div role="status" class="notice ${noticeError ? 'error' : ''}">${escapeHtml(notice)}</div>` : '';
   if (state.phase === 'complete') return `<div class="action-panel"><div class="end-card"><p class="eyebrow">Encounter complete</p><h2>Ready for Day 1</h2><p>${state.heroes.map(item => `${escapeHtml(item.name)}: ${escapeHtml(item.className)}`).join('<br>')}</p><p>The campaign itself is not connected yet.</p><button class="button primary" data-action="reset" ${room ? 'disabled' : ''}>Play again</button></div></div>`;
   if (state.phase === 'rewards') return `<div class="action-panel"><div class="panel-heading section-label" style="margin:0"><span>Class rewards</span><small>${state.outcome === 'victory' ? 'Victory' : 'Defeat'}</small></div>${noticeBlock}<p class="small-note">Each adventurer chooses one class (Rulebook pp.93–94). Adventurers with fewer than two earned classes draw after the others choose.</p></div>`;
-  const contextual = state.phase === 'roll' ? renderRoll() : state.phase === 'enemy-defense' ? renderDefense() : state.phase === 'lockpick' ? renderLockpick() : `
+  const deployment = `<div><label for="battle-form">Battle form</label><select id="battle-form" class="field">${FORMS.map(([id, title]) => `<option value="${id}" ${form === id ? 'selected' : ''}>${title}</option>`).join('')}</select></div><p class="small-note">Deploy ${escapeHtml(hero.name)} to a highlighted hex of the entrance tile. Adventurers deploy in turn order${state.heroes.length > 1 ? `; ${escapeHtml(state.heroes[0].name)} took the first player token` : ''}.</p>`;
+  const contextual = state.phase === 'deploy' ? deployment : state.phase === 'roll' ? renderRoll() : state.phase === 'enemy-defense' ? renderDefense() : state.phase === 'lockpick' ? renderLockpick() : `
     <div><label for="battle-form">Battle form</label><select id="battle-form" class="field" ${state.phase !== 'heroes' ? 'disabled' : ''}>${FORMS.map(([id, title]) => `<option value="${id}" ${form === id ? 'selected' : ''}>${title}</option>`).join('')}</select><p class="small-note" style="margin-top:7px">${form === 'magic' ? 'Range: Magicka. Combat dice cannot be rolled.' : form === 'ranged-weapon' ? 'Range: 2 to Stamina. Adjacent enemies cannot be targeted.' : form === 'defensive' ? 'Build active defense without an attack target.' : 'Range: adjacent hexes.'}</p></div>
     ${renderDice()}<div><label>Engage target</label><div class="target-box">${target ? `<div>${escapeHtml(target.name)}<br><span>${target.hp} HP · ${target.defense} defense · ${escapeHtml(target.skill ?? '')}</span></div><button class="quiet-button" data-action="clear-target" title="Clear target" aria-label="Clear target">×</button>` : '<span>Choose an enemy on the board.</span>'}</div></div>
     <div class="actions-stack">${state.phase === 'start' ? `<button class="button primary" data-action="begin-turn">Begin turn · recover ${hero.cooldownStat}</button>${JAILBREAK_MAP.cells[hero.position]?.exit ? '<button class="button" data-action="escape">Escape through this exit</button>' : ''}` : `<button class="button primary" data-action="engage">Roll selected dice${state.turn?.engages > 0 ? ' · +1 fatigue' : ''}</button><button class="quiet-button" data-action="end-turn">End ${escapeHtml(hero.name)}’s turn</button><p class="small-note">${state.turn?.moves ?? 0}/2 move actions · ${state.turn?.engages ?? 0} engages${state.turn?.continueMove ? ` · ${state.turn.continueMove} ${state.turn.continueMove === 1 ? 'hex' : 'hexes'} left in the interrupted move` : ''}<br>A second move prevents engaging this turn.</p>`}</div>`;
-  return `<div class="action-panel"><div class="panel-heading section-label" style="margin:0"><span>${state.phase === 'enemy-defense' ? 'Enemy attack' : state.phase === 'lockpick' ? 'Lockpick check' : 'Adventurer actions'}</span><small>${escapeHtml(hero.name)}</small></div>${noticeBlock}${contextual}${renderFreeActions()}</div>`;
+  return `<div class="action-panel"><div class="panel-heading section-label" style="margin:0"><span>${state.phase === 'enemy-defense' ? 'Enemy attack' : state.phase === 'lockpick' ? 'Lockpick check' : state.phase === 'deploy' ? 'Deployment' : 'Adventurer actions'}</span><small>${escapeHtml(hero.name)}</small></div>${noticeBlock}${contextual}${renderFreeActions()}</div>`;
 }
 
 function phaseMessage() {
@@ -421,6 +424,7 @@ function phaseMessage() {
   if (state.phase === 'lockpick') return [`${hero.name} · lockpick check`, 'Roll, adjust results with fatigue, then check them against the cache code.'];
   if (state.phase === 'roll') return ['Resolve rolled dice', 'Resolve or skip each face, then confirm the result.'];
   if (state.phase === 'enemy-defense') return [`${hero.name} is being attacked`, 'Choose active dice for prevention, or accept the damage.'];
+  if (state.phase === 'deploy') return [`${hero.name} · deployment`, 'Choose a battle form, then a highlighted entrance hex.'];
   if (state.phase === 'start') return [`${hero.name} · start of turn`, 'Begin to recover cooldown dice. You may escape now if standing on an exit.'];
   if (state.turn?.continueMove) return [`${hero.name} · continue moving`, `The lockpick check interrupted a move: up to ${state.turn.continueMove} more ${state.turn.continueMove === 1 ? 'hex' : 'hexes'} without a new move action.`];
   return [`${hero.name} · take your actions`, 'Choose a highlighted hex to move. Select a form, dice and a target to engage.'];
@@ -428,12 +432,35 @@ function phaseMessage() {
 
 const valenwoodOption = checked => `<label class="result-choice option-choice"><input type="checkbox" id="valenwood-option" ${checked ? 'checked' : ''}> Include Valenwood expansion classes (Arcanist, Burglar, Ranger)</label>`;
 
+/** Encounter options. Online, seat 1 (the host) controls the first adventurer. */
+function renderSetupForm({ online = false, players = 1 } = {}) {
+  const standard = state.setup === 'standard';
+  const party = (state.heroes ?? []).map(hero => hero.id).join(',');
+  const parties = players > 1
+    ? [['argonian,dark-elf', 'You play the Argonian and take the first turn'], ['dark-elf,argonian', 'You play the Dark Elf and take the first turn']]
+    : [['argonian,dark-elf', 'Both adventurers · Argonian takes the first turn'], ['dark-elf,argonian', 'Both adventurers · Dark Elf takes the first turn'], ['argonian', 'Solo · Argonian (One Hand and Shield)'], ['dark-elf', 'Solo · Dark Elf (Destruction Staff)']];
+  return `<fieldset class="setup-form"><legend>Setup</legend><label class="result-choice option-choice"><input type="radio" name="setup" value="tutorial" ${standard ? '' : 'checked'}> Official tutorial setup: fixed bandits and positions, both adventurers</label><label class="result-choice option-choice"><input type="radio" name="setup" value="standard" ${standard ? 'checked' : ''}> Standard Jailbreak: one enemy per adventurer drawn from the five-enemy bag, then deploy</label><label for="setup-party">Adventurers for the standard setup</label><select id="setup-party" class="field" ${standard ? '' : 'disabled'}>${parties.map(([value, label]) => `<option value="${value}" ${value === party ? 'selected' : ''}>${escapeHtml(label)}</option>`).join('')}</select><label for="setup-difficulty">Difficulty</label><select id="setup-difficulty" class="field">${DIFFICULTIES.map(level => `<option value="${level}" ${level === (state.difficulty ?? 'Adept') ? 'selected' : ''}>${level}</option>`).join('')}</select><p class="small-note">In this battle only Expert changes the rules: each additional engage gains 2 light fatigue instead of 1.${online ? ' The server draws the enemies.' : ''}</p>${valenwoodOption(state.expansions?.includes('valenwood'))}</fieldset>`;
+}
+
+function readSetupOptions() {
+  const setup = root.querySelector('input[name="setup"]:checked')?.value ?? 'tutorial';
+  const options = { setup, difficulty: root.querySelector('#setup-difficulty')?.value ?? 'Adept' };
+  if (setup === 'standard') options.party = (root.querySelector('#setup-party')?.value ?? 'argonian,dark-elf').split(',');
+  if (root.querySelector('#valenwood-option')?.checked) options.expansions = ['valenwood'];
+  return options;
+}
+
+function seatLabel(member) {
+  const heroes = room?.game ? state.heroes.filter(hero => hero.ownerSeat === member.seat).map(hero => hero.name) : [];
+  return heroes.length ? heroes.join(' & ') : member.seat === 0 ? 'Seat 1' : 'Seat 2';
+}
+
 function renderModal() {
   if (!modal) return '';
-  if (modal === 'reset') return `<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"><p class="eyebrow">New encounter</p><h2 id="modal-title">Reset this table?</h2><p>Your current local Jailbreak encounter will be replaced with the official two-adventurer tutorial setup.</p>${valenwoodOption(state.expansions?.includes('valenwood'))}<div class="modal-actions"><button class="quiet-button" data-action="close-modal">Keep playing</button><button class="button primary" data-action="confirm-reset">Start again</button></div></section></div>`;
+  if (modal === 'reset') return `<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"><p class="eyebrow">New encounter</p><h2 id="modal-title">Start a new Jailbreak?</h2><p>Your current local encounter will be replaced.</p>${renderSetupForm()}<div class="modal-actions"><button class="quiet-button" data-action="close-modal">Keep playing</button><button class="button primary" data-action="confirm-reset">Start again</button></div></section></div>`;
   const inviteUrl = room ? `${location.origin}/tabletop.html?room=${encodeURIComponent(room.id)}` : '';
   const unavailable = networkStatus?.onlineAvailable === false;
-  return `<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"><p class="eyebrow">Online co-op</p><h2 id="modal-title">A shared table</h2>${networkError ? `<div class="notice error" role="status">${escapeHtml(networkError)}</div>` : ''}${room ? `<p>${room.phase === 'lobby' ? 'Invite a friend or start with both adventurers under your control.' : 'Your encounter is synchronized with the shared table.'}</p><ul class="room-members">${room.members.map(member => `<li>${escapeHtml(member.name)} <span>${member.isHost ? 'Host' : 'Player'} · ${member.seat === 0 ? 'Argonian' : 'Dark Elf'}</span></li>`).join('')}</ul><label for="invite-link">Invite link — no session token included</label><input id="invite-link" class="field" readonly value="${escapeHtml(inviteUrl)}"><button class="quiet-button" data-action="copy-invite">Copy invite link</button>${room.phase === 'lobby' && room.self.isHost ? `${valenwoodOption(false)}<button class="button primary" data-action="start-room">Start shared encounter</button>` : room.phase === 'lobby' ? '<p class="small-note">Waiting for the host to start.</p>' : ''}<div class="modal-actions"><button class="quiet-button" data-action="leave-room">Return to local table</button><button class="button" data-action="close-modal">Close</button></div>` : `<p>${unavailable ? 'Online co-op is not connected on this deployment. Local play is available now.' : networkStatus === null ? 'Checking the multiplayer server…' : 'Create a table or join a friend. This tutorial has two adventurers and supports up to two human players.'}</p>${unavailable ? `<p class="small-note">${escapeHtml(networkStatus.reason ?? 'The server needs persistent shared storage before it can host rooms.')}</p>` : ''}<label for="player-name">Your name</label><input id="player-name" class="field" maxlength="40" value="Adventurer" ${unavailable ? 'disabled' : ''}><button class="button primary" data-action="create-room" ${unavailable || networkStatus === null || networkBusy ? 'disabled' : ''}>Create a table</button><label for="room-code">Room code from an invite link</label><input id="room-code" class="field" value="${escapeHtml(requestedRoom)}" placeholder="Paste the room code" ${unavailable ? 'disabled' : ''}><button class="button" data-action="join-room" ${unavailable || networkStatus === null || networkBusy ? 'disabled' : ''}>Join table</button><p class="small-note" style="margin-top:15px">Local play controls both heroes in the fixed tutorial. The published one-adventurer solo setup is not implemented yet.</p><div class="modal-actions"><button class="quiet-button" data-action="close-modal">Back to local play</button></div>`}</section></div>`;
+  return `<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"><p class="eyebrow">Online co-op</p><h2 id="modal-title">A shared table</h2>${networkError ? `<div class="notice error" role="status">${escapeHtml(networkError)}</div>` : ''}${room ? `<p>${room.phase === 'lobby' ? 'Invite a friend or start with both adventurers under your control.' : 'Your encounter is synchronized with the shared table.'}</p><ul class="room-members">${room.members.map(member => `<li>${escapeHtml(member.name)} <span>${member.isHost ? 'Host' : 'Player'} · ${escapeHtml(seatLabel(member))}</span></li>`).join('')}</ul><label for="invite-link">Invite link — no session token included</label><input id="invite-link" class="field" readonly value="${escapeHtml(inviteUrl)}"><button class="quiet-button" data-action="copy-invite">Copy invite link</button>${room.phase === 'lobby' && room.self.isHost ? `${renderSetupForm({ online: true, players: room.members.length })}<button class="button primary" data-action="start-room">Start shared encounter</button>` : room.phase === 'lobby' ? '<p class="small-note">Waiting for the host to start.</p>' : ''}<div class="modal-actions"><button class="quiet-button" data-action="leave-room">Return to local table</button><button class="button" data-action="close-modal">Close</button></div>` : `<p>${unavailable ? 'Online co-op is not connected on this deployment. Local play is available now.' : networkStatus === null ? 'Checking the multiplayer server…' : 'Create a table or join a friend. Each of up to two players controls an adventurer; the host chooses the setup.'}</p>${unavailable ? `<p class="small-note">${escapeHtml(networkStatus.reason ?? 'The server needs persistent shared storage before it can host rooms.')}</p>` : ''}<label for="player-name">Your name</label><input id="player-name" class="field" maxlength="40" value="Adventurer" ${unavailable ? 'disabled' : ''}><button class="button primary" data-action="create-room" ${unavailable || networkStatus === null || networkBusy ? 'disabled' : ''}>Create a table</button><label for="room-code">Room code from an invite link</label><input id="room-code" class="field" value="${escapeHtml(requestedRoom)}" placeholder="Paste the room code" ${unavailable ? 'disabled' : ''}><button class="button" data-action="join-room" ${unavailable || networkStatus === null || networkBusy ? 'disabled' : ''}>Join table</button><p class="small-note" style="margin-top:15px">Local play controls every adventurer. Restart to choose the standard setup, a solo adventurer or another difficulty.</p><div class="modal-actions"><button class="quiet-button" data-action="close-modal">Back to local play</button></div>`}</section></div>`;
 }
 
 function renderBoardColumn() {
@@ -441,17 +468,17 @@ function renderBoardColumn() {
   const banner = `<div class="turn-banner" role="status"><span class="turn-number">${['complete', 'rewards'].includes(state.phase) ? '✓' : state.phase === 'enemy-defense' ? '!' : state.activeHero + 1}</span><div><strong>${escapeHtml(phaseTitle)}</strong><p>${escapeHtml(phaseDescription)}</p></div></div>`;
   if (state.phase === 'rewards') return `${renderRewards()}${banner}`;
   if (state.phase === 'complete') return `${renderComplete()}${banner}${renderAchievements({ showClasses: true })}`;
-  return `<div class="board-heading"><div><p class="eyebrow">Introduction encounter</p><h2>Find a way out</h2><p>Defeat all enemies or escape with every undefeated adventurer.</p></div></div>${renderBoard()}${renderEnemies()}${banner}${renderAchievements()}`;
+  return `<div class="board-heading"><div><p class="eyebrow">Introduction encounter · ${state.setup === 'standard' ? 'standard draw' : 'tutorial setup'}</p><h2>Find a way out</h2><p>Defeat all enemies or escape with every undefeated adventurer.</p></div></div>${renderBoard()}${renderEnemies()}${banner}${renderAchievements()}`;
 }
 
 function render() {
-  const roundLabel = ['complete', 'rewards'].includes(state.phase) ? ['✓', 'Battle over'] : [state.round >= 6 ? 'VI+' : ['', 'I', 'II', 'III', 'IV', 'V'][state.round] ?? state.round, state.round >= 6 ? 'Fatigue round' : 'Battle round'];
+  const roundLabel = ['complete', 'rewards'].includes(state.phase) ? ['✓', 'Battle over'] : state.phase === 'deploy' ? ['⇣', 'Deployment'] : [state.round >= 6 ? 'VI+' : ['', 'I', 'II', 'III', 'IV', 'V'][state.round] ?? state.round, state.round >= 6 ? 'Fatigue round' : 'Battle round'];
   root.innerHTML = `<header class="topbar"><div class="brand"><img src="/favicon.svg" alt=""><div><p class="eyebrow">The Elder Scrolls · Betrayal of the Second Era</p><h1>Jailbreak</h1></div></div><div class="top-actions"><div class="round-tag"><strong>${roundLabel[0]}</strong><span>${roundLabel[1]}</span></div><span class="network-tag">${room ? `Shared table · ${room.members.length} player${room.members.length > 1 ? 's' : ''}<br>${networkBusy ? 'Synchronizing…' : canAct() ? 'You control this adventurer' : 'Waiting for the other player'}` : 'Local table<br>Both adventurers under your control'}</span><button class="quiet-button" data-action="network">${room ? 'Shared table' : 'Co-op status'}</button><button class="quiet-button" data-action="reset" ${room ? 'disabled' : ''}>Restart</button></div></header>
-    <div class="scope-note"><span class="alpha-pill">TABLETOP ALPHA</span><span>The full Jailbreak introduction for the fixed two-hero tutorial setup: battle, cache, achievements and class rewards. Class abilities and the campaign are not connected yet.</span><a href="#tabletop-help">Rules & scope</a></div>
+    <div class="scope-note"><span class="alpha-pill">TABLETOP ALPHA</span><span>The full Jailbreak introduction with the two tutorial adventurers: the tutorial setup or a standard enemy draw, solo or as a pair, through cache, achievements and class rewards. Class abilities and the campaign are not connected yet.</span><a href="#tabletop-help">Rules & scope</a></div>
     <main class="game-layout"><aside class="party-column"><div class="section-label"><span>Your adventurers</span><small>Party XP ${state.partyXp}</small></div>${state.heroes.map(renderHero).join('')}</aside>
     <section class="board-column">${renderBoardColumn()}</section>
     <aside class="actions-column">${renderActionPanel()}<section class="log-panel"><div class="section-label"><span>Table chronicle</span><small>Latest events</small></div><ol class="event-log" aria-label="Battle event history">${state.log.slice(-7).reverse().map(line => `<li>${escapeHtml(line)}</li>`).join('') || '<li>The party enters the jail.</li>'}</ol></section><p class="save-note">${room ? 'Shared state is saved by the multiplayer server' : saveAvailable ? 'Saved automatically on this browser' : 'Browser storage unavailable · this encounter is not saved'}</p></aside>
-    </main><footer class="footer-notes"><details class="help-box" id="tabletop-help"><summary>How to play · verified rules and current scope</summary><div class="help-content"><div><strong>On your turn</strong><ul><li>Begin the turn to recover dice from the left of your cooldown track.</li><li>Move up to Stamina per move action. A second move excludes engaging.</li><li>Choose a battle form, compatible dice and an enemy in range, then roll.</li><li>Resolve dice, use active defense when attacked, and end your turn.</li><li>End a move on the cache to try its lockpick check; unused movement may continue afterwards.</li></ul></div><div><strong>Tabletop rules in this encounter</strong><p>Combat is a skill line. Stamina and Magicka limit different skill dice. Extra engages add light fatigue; exhausted dice queue in a 13-slot cooldown track.</p><p>Round six and later add overfatigue and deal true damage. Victory is checked at the end of the round. Escaping is available at the start of a turn from an exit. Achievements decide the class choices after the battle.</p></div><div><strong>An implementation in progress</strong><p>This fixed two-hero tutorial setup is the beginning of a rules-enforced adaptation, not the complete board game. Class abilities, the random five-enemy draw, the one-hero solo setup and the campaign are not yet connected.</p><p class="sources">Rules reference: <a href="https://chiptheorygames.com/pages/support/the-elder-scrolls" target="_blank" rel="noreferrer">official CTG rulebook and extended tutorial</a>, plus the <a href="https://support.chiptheorygames.com/support/solutions/articles/33000314951-resolving-skills-and-abilities-do-as-much-as-possible" target="_blank" rel="noreferrer">ability-resolution</a> and <a href="https://support.chiptheorygames.com/support/solutions/articles/33000292544-enemy-movement-how-does-it-work-in-more-detail-" target="_blank" rel="noreferrer">enemy movement</a> FAQs. Map graphics here are original SVG components.</p></div></div></details><p class="footer-credit">Unofficial implementation in progress. The Elder Scrolls and the tabletop game belong to their respective owners.</p></footer>${renderModal()}`;
+    </main><footer class="footer-notes"><details class="help-box" id="tabletop-help"><summary>How to play · verified rules and current scope</summary><div class="help-content"><div><strong>On your turn</strong><ul><li>Begin the turn to recover dice from the left of your cooldown track.</li><li>Move up to Stamina per move action. A second move excludes engaging.</li><li>Choose a battle form, compatible dice and an enemy in range, then roll.</li><li>Resolve dice, use active defense when attacked, and end your turn.</li><li>End a move on the cache to try its lockpick check; unused movement may continue afterwards.</li></ul></div><div><strong>Tabletop rules in this encounter</strong><p>Combat is a skill line. Stamina and Magicka limit different skill dice. Extra engages add light fatigue; exhausted dice queue in a 13-slot cooldown track.</p><p>Round six and later add overfatigue and deal true damage. Victory is checked at the end of the round. Escaping is available at the start of a turn from an exit. Achievements decide the class choices after the battle.</p><p>The standard setup draws one of five level-1 enemies per adventurer: High Elf and Argonian Bandits, Skeever Pup, Skeleton and Spriggan.</p></div><div><strong>An implementation in progress</strong><p>This encounter is the beginning of a rules-enforced adaptation, not the complete board game. Other races and skill lines, class abilities and the campaign are not yet connected.</p><p class="sources">Rules reference: <a href="https://chiptheorygames.com/pages/support/the-elder-scrolls" target="_blank" rel="noreferrer">official CTG rulebook and extended tutorial</a>, plus the <a href="https://support.chiptheorygames.com/support/solutions/articles/33000314951-resolving-skills-and-abilities-do-as-much-as-possible" target="_blank" rel="noreferrer">ability-resolution</a> and <a href="https://support.chiptheorygames.com/support/solutions/articles/33000292544-enemy-movement-how-does-it-work-in-more-detail-" target="_blank" rel="noreferrer">enemy movement</a> FAQs. Map graphics here are original SVG components.</p></div></div></details><p class="footer-credit">Unofficial implementation in progress. The Elder Scrolls and the tabletop game belong to their respective owners.</p></footer>${renderModal()}`;
   bindEvents();
   if (!canAct()) root.querySelectorAll('.action-panel button,.action-panel input,.action-panel select').forEach(element => { element.disabled = true; });
   if (modal) root.querySelector('.modal button')?.focus();
@@ -468,7 +495,10 @@ function bindEvents() {
     render();
   }));
   root.querySelectorAll('[data-hex]').forEach(element => {
-    const move = () => { if (state.phase === 'heroes') dispatch({ type: 'move', to: element.dataset.hex }); };
+    const move = () => {
+      if (state.phase === 'heroes') dispatch({ type: 'move', to: element.dataset.hex });
+      else if (state.phase === 'deploy') dispatch({ type: 'deploy', hex: element.dataset.hex, form });
+    };
     element.addEventListener('click', move);
     element.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); move(); } });
   });
@@ -489,13 +519,16 @@ function bindEvents() {
     if (form === 'defensive') targetId = null;
     render();
   });
-  const expansionsChoice = () => (root.querySelector('#valenwood-option')?.checked ? ['valenwood'] : []);
+  root.querySelectorAll('input[name="setup"]').forEach(input => input.addEventListener('change', () => {
+    const party = root.querySelector('#setup-party');
+    if (party) party.disabled = root.querySelector('input[name="setup"]:checked')?.value !== 'standard';
+  }));
   root.querySelectorAll('[data-action]').forEach(button => button.addEventListener('click', () => {
     const action = button.dataset.action;
     if (action === 'reset' || action === 'network') { modal = room && action === 'reset' ? 'network' : action; render(); return; }
     if (action === 'close-modal') { modal = null; render(); return; }
     if (action === 'create-room' || action === 'join-room') { void connectRoom(action === 'create-room' ? 'create' : 'join'); return; }
-    if (action === 'start-room') { const expansions = expansionsChoice(); void sendRoomAction('start', undefined, expansions.length ? { expansions } : undefined); return; }
+    if (action === 'start-room') { void sendRoomAction('start', undefined, readSetupOptions()); return; }
     if (action === 'copy-invite') {
       const input = root.querySelector('#invite-link');
       input?.select();
@@ -509,7 +542,7 @@ function bindEvents() {
       state = loadGame(); selectedDice.clear(); targetId = null; form = currentHero().form; render(); return;
     }
     if (action === 'confirm-reset') {
-      state = createJailbreak({ expansions: expansionsChoice() }); selectedDice.clear(); targetId = null; form = currentHero().form; modal = null; notice = ''; saveGame(); render(); return;
+      state = createJailbreak(readSetupOptions()); selectedDice.clear(); targetId = null; form = currentHero().form; modal = null; notice = ''; saveGame(); render(); return;
     }
     if (action === 'clear-target') { targetId = null; render(); return; }
     if (action === 'engage') { dispatch({ type: 'engage', form, targetId, diceIds: [...selectedDice] }); return; }

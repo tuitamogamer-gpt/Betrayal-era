@@ -215,3 +215,39 @@ test('real engine: lockpick dice come from the server and only each owner choose
   assert.deepEqual(snapshot.game.heroes.map(hero => hero.className), [offered[1], darkElfOffer[0]]);
   assert.equal(snapshot.game.partyXp, 2);
 });
+
+test('real engine: the host chooses a standard setup; the server draws enemies and each owner deploys', async t => {
+  const { request } = await app(t, {}, true);
+  const host = (await request({ operation: 'create', name: 'Dark Elf player' })).body;
+  const guest = (await request({ operation: 'join', roomId: host.roomId, name: 'Argonian player' })).body;
+  const soloForTwo = await request({ operation: 'start', roomId: host.roomId, expectedRevision: 1, requestId: 'start_solo_01', options: { setup: 'standard', party: ['argonian'] } }, host.token);
+  assert.equal(soloForTwo.status, 400);
+  assert.equal(soloForTwo.body.error.code, 'FIXTURE_PLAYERS');
+  const forged = await request({ operation: 'start', roomId: host.roomId, expectedRevision: 1, requestId: 'start_bad_02', options: { setup: 'standard', enemies: ['skeleton'] } }, host.token);
+  assert.equal(forged.body.error.code, 'UNSUPPORTED_OPTIONS');
+  const started = await request({ operation: 'start', roomId: host.roomId, expectedRevision: 1, requestId: 'start_std_01',
+    options: { setup: 'standard', party: ['dark-elf', 'argonian'], difficulty: 'Expert' } }, host.token);
+  assert.equal(started.status, 200);
+  let snapshot = started.body.snapshot;
+  assert.equal(snapshot.game.phase, 'deploy');
+  assert.equal(snapshot.game.difficulty, 'Expert');
+  assert.deepEqual(snapshot.game.heroes.map(hero => [hero.id, hero.ownerSeat]), [['dark-elf', 0], ['argonian', 1]]);
+  assert.equal(snapshot.game.enemies.length, 2);
+  assert.notEqual(snapshot.game.enemies[0].id, snapshot.game.enemies[1].id);
+  let count = 0;
+  async function command(player, action) {
+    const result = await request({ operation: 'action', roomId: host.roomId, expectedRevision: snapshot.revision, requestId: `std_action_${++count}`, action }, player.token);
+    if (result.status === 200) snapshot = result.body.snapshot;
+    return result;
+  }
+  assert.equal((await command(guest, { type: 'deploy', hex: '8,4', form: 'magic' })).status, 403);
+  assert.equal((await command(host, { type: 'deploy', hex: '8,4', form: 'magic' })).status, 200);
+  const taken = await command(guest, { type: 'deploy', hex: '8,4', form: 'light-weapon' });
+  assert.equal(taken.status, 400);
+  assert.equal(taken.body.error.code, 'ILLEGAL_DEPLOYMENT');
+  assert.equal((await command(guest, { type: 'deploy', hex: '7,3', form: 'light-weapon' })).status, 200);
+  assert.equal(snapshot.game.phase, 'start');
+  assert.equal(snapshot.game.activeHero, 0);
+  assert.equal((await command(guest, { type: 'begin-turn' })).status, 403);
+  assert.equal((await command(host, { type: 'begin-turn' })).status, 200);
+});

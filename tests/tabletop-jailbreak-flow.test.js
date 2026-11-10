@@ -110,7 +110,7 @@ test('Tutorial pp.19–22: lockpick, item, final attack, cleanup and the publish
   assert.deepEqual(state.heroes.map(item => [item.className, item.hp, item.cooldown.length, item.tenacity, item.savedXp]),
     [['Acrobat', 5, 0, 1, 0], ['Sorcerer', 4, 0, 0, 0]]);
   assert.deepEqual(state.heroes[0].items, [meatLoaf()]);
-  assert.deepEqual(state.supply, { light: 20, over: 12 });
+  assert.deepEqual(state.supply, { light: 20, over: 12, status: 12 });
   assert.ok(state.heroes.every(item => item.dice.every(die => die.state === 'available')));
   assert.throws(() => act(state, { type: 'begin-turn' }), { code: 'ENCOUNTER_COMPLETE' });
 });
@@ -174,11 +174,11 @@ test('R p69: each adjustment step gains fatigue through the real supply, and mus
   const light = (prefix, count) => Array.from({ length: count }, (_, index) => ({ id: `${prefix}-${index}`, kind: 'light-fatigue' }));
   state.heroes[1].cooldown = light('dark-elf-light', 13);
   state.heroes[0].cooldown = light('argonian-light', 6);
-  state.supply = { light: 1, over: 12 };
+  state.supply = { light: 1, over: 12, status: 12 };
   assert.ok(isJailbreakState(state));
   state = act(state, { type: 'lockpick-adjust', dieIndex: 0, delta: 3 });
   assert.deepEqual(state.heroes[0].cooldown.slice(6).map(die => die.kind), ['light-fatigue', 'overfatigue', 'overfatigue']);
-  assert.deepEqual(state.supply, { light: 0, over: 10 });
+  assert.deepEqual(state.supply, { light: 0, over: 10, status: 12 });
   assert.equal(state.pending.check.fatigueSpent, 3);
   assert.throws(() => act(state, { type: 'lockpick-adjust', dieIndex: 1, delta: 5 }), { code: 'LOCKPICK_RULE' });
   state = act(state, { type: 'lockpick-resolve' });
@@ -188,7 +188,7 @@ test('R p69: each adjustment step gains fatigue through the real supply, and mus
   // both supplies empty. The reducer still refuses an unpayable cost atomically.
   let unpayable = act(besideCache(), { type: 'move', to: '2,4' });
   unpayable = act(unpayable, { type: 'lockpick-roll' }, [d6(1), d6(2), d6(2)]);
-  unpayable.supply = { light: 0, over: 0 };
+  unpayable.supply = { light: 0, over: 0, status: 12 };
   const before = structuredClone(unpayable);
   assert.throws(() => reduceJailbreak(unpayable, { type: 'lockpick-adjust', dieIndex: 0, delta: 1 }), { code: 'FATIGUE_SUPPLY_EMPTY' });
   assert.deepEqual(unpayable, before);
@@ -412,9 +412,14 @@ test('Battle cleanup removes bonus HP and recovers drained dice before rewards',
   assert.equal(state.heroes[1].dice[0].state, 'available');
 });
 
-test('Schema-1 saves upgrade without losing progress; finished battles continue to rewards', () => {
+test('Schema-1 and schema-2 saves upgrade without losing progress; finished battles continue to rewards', () => {
   const current = act(createJailbreak(), { type: 'begin-turn' });
-  const legacy = structuredClone(current);
+  const schema2 = structuredClone(current);
+  schema2.schemaVersion = 2;
+  delete schema2.setup; delete schema2.supply.status;
+  assert.deepEqual(upgradeJailbreak(schema2), current);
+
+  const legacy = structuredClone(schema2);
   legacy.schemaVersion = 1;
   for (const key of ['expansions', 'cache', 'rewards']) delete legacy[key];
   delete legacy.achievements.lockpick;
@@ -431,7 +436,7 @@ test('Schema-1 saves upgrade without losing progress; finished battles continue 
   const resumed = upgradeJailbreak(finished);
   assert.equal(resumed.phase, 'rewards');
   assert.ok(isJailbreakState(resumed));
-  assert.throws(() => upgradeJailbreak({ schemaVersion: 3, mode: 'jailbreak-combat' }), { code: 'INVALID_SAVE' });
+  assert.throws(() => upgradeJailbreak({ schemaVersion: JAILBREAK_SCHEMA_VERSION + 1, mode: 'jailbreak-combat' }), { code: 'INVALID_SAVE' });
 });
 
 test('Saved-state validation rejects shapes the reducer cannot continue', () => {

@@ -55,7 +55,7 @@ test('T11–18: full prescribed first round reproduces HP, queue order, active s
   assert.deepEqual(state.heroes[1].cooldown.map(die => die.skill ?? die.kind), ['force-shock','force-shock','light-fatigue','combat','combat','light-fatigue']);
   assert.equal(state.heroes[0].dice.filter(die => die.state === 'active').length, 1);
   assert.equal(state.heroes[1].dice.filter(die => die.state === 'active').length, 0);
-  assert.deepEqual(state.supply, { light: 17, over: 12 });
+  assert.deepEqual(state.supply, { light: 17, over: 12, status: 12 });
   state = startHero(state);
   assert.deepEqual(state.heroes[0].cooldown.map(die => die.kind), ['light-fatigue']);
   assert.equal(state.heroes[0].dice.filter(die => die.state === 'available').length, 2);
@@ -190,12 +190,12 @@ test('R57: round six adds overfatigue and true damage rather than a hard turn-li
 });
 
 test('R21: empty fatigue supplies never fabricate dice', () => {
-  let state=startHero(createJailbreak()); state.supply={light:0,over:1};
+  let state=startHero(createJailbreak()); state.supply={light:0,over:1,status:12};
   state=act(state,{type:'engage',form:'defensive',diceIds:[]});state=act(state,{type:'resolve'});
   state=act(state,{type:'engage',form:'defensive',diceIds:[]});state=act(state,{type:'resolve'});
   assert.equal(state.heroes[0].cooldown[0].kind,'overfatigue');
   state=act(state,{type:'engage',form:'defensive',diceIds:[]});
-  assert.equal(state.heroes[0].cooldown.length,1); assert.deepEqual(state.supply,{light:0,over:0});
+  assert.equal(state.heroes[0].cooldown.length,1); assert.deepEqual(state.supply,{light:0,over:0,status:12});
 });
 
 test('Rejected duplicate dice, invalid resolution order and malformed randomness do not mutate a save', () => {
